@@ -26,3 +26,9 @@
   a malformed callback returns a normal rejection instead of HTTP 500.
 - Validate endpoint types before set membership: malformed JSON can contain
   arrays/objects instead of strings, which are unhashable.
+- yt-dlp reads and writes its `--cookies` file. Use a private per-video copy so
+  an in-flight job cannot overwrite a replacement upload or the user's export.
+- yt-dlp's cookie loader prints malformed records, including values. Validate
+  Netscape exports before passing them to yt-dlp and return generic errors.
+- Browser profile paths are not interchangeable: Safari expects a binarycookies
+  file where Firefox/Chromium accept profiles. Clear drafts when browsers change.

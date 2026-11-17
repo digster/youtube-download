@@ -35,6 +35,8 @@ const state = {
   login: null,
   loginPolling: false,
   loginBusy: false,
+  cookies: null,
+  cookieBusy: false,
 };
 const labels = {
   idle: "Not started",
@@ -311,10 +313,173 @@ function setup() {
   const check = (name, ok, yes, no) =>
     `<div class="setup-check"><span>${name}</span><strong class="${ok ? "" : "warning"}">${ok ? yes : no}</strong></div>`;
   $("#setup-content").innerHTML =
-    `<section class="auth-card" aria-label="Google connection"><h3>Your YouTube account</h3><p>Connect with Google to see your playlists. Sign-in opens in your browser and requests read-only YouTube access.</p><div id="auth-controls" aria-live="polite"></div><p id="auth-error" class="auth-error" role="alert" hidden></p><details id="auth-file-options" ${state.login?.configured ? "" : "open"}><summary>Google OAuth client file</summary><p id="auth-config-status"></p><label class="auth-file-label" for="auth-client-file">Choose Desktop app client JSON</label><input id="auth-client-file" type="file" accept=".json,application/json"><p class="muted">Use the OAuth client JSON from your Google Cloud project. The file stays on this computer.</p></details></section>${s ? check("ffmpeg", s.ffmpeg, "Ready", "Install required") + check("JavaScript runtime", s.javascript, "Ready", "Install Node or Deno") + check("Download cookies", s.cookies, "Configured", "Optional · for restricted videos") : "<p>Server status is unavailable.</p>"}<h3>Where your videos live</h3><code>${escapeHTML(s?.download_dir || "Configured in .env")}</code><p>${s ? `${bytes(s.free_bytes)} available. ` : ""}Change a playlist's folder on its library page after moving its contents. Downloads use video ID subfolders so titles can change safely.</p><h3>Private or restricted videos</h3><p>Google supplies the playlist list. Set <strong>YTDL_COOKIES_BROWSER=chrome</strong> or <strong>YTDL_COOKIES_FILE</strong> in .env for yt-dlp, then restart the app. Use only one cookie source.</p><h3>Dependencies</h3><p>Install ffmpeg and Node or Deno. On macOS with Homebrew:</p><code>brew install ffmpeg node</code><p class="muted">Active playlists resume when the app restarts. Paused playlists stay paused. Watch Later and saved playlists from other channels are not exposed by the account API.</p>`;
+    `<section class="auth-card" aria-label="Google connection"><h3>Your YouTube account</h3><p>Connect with Google to see your playlists. Sign-in opens in your browser and requests read-only YouTube access.</p><div id="auth-controls" aria-live="polite"></div><p id="auth-error" class="auth-error" role="alert" hidden></p><details id="auth-file-options" ${state.login?.configured ? "" : "open"}><summary>Google OAuth client file</summary><p id="auth-config-status"></p><label class="auth-file-label" for="auth-client-file">Choose Desktop app client JSON</label><input id="auth-client-file" type="file" accept=".json,application/json"><p class="muted">Use the OAuth client JSON from your Google Cloud project. The file stays on this computer.</p></details></section><section class="cookie-card" aria-label="Download cookies"><h3>Private or restricted videos</h3><p>Google supplies your playlist list. For videos that need sign-in, choose where yt-dlp gets your YouTube cookies.</p><div id="cookie-controls"></div></section>${s ? check("ffmpeg", s.ffmpeg, "Ready", "Install required") + check("JavaScript runtime", s.javascript, "Ready", "Install Node or Deno") : "<p>Server status is unavailable.</p>"}<h3>Where your videos live</h3><code>${escapeHTML(s?.download_dir || "Configured in .env")}</code><p>${s ? `${bytes(s.free_bytes)} available. ` : ""}Change a playlist's folder on its library page after moving its contents. Downloads use video ID subfolders so titles can change safely.</p><h3>Dependencies</h3><p>Install ffmpeg and Node or Deno. On macOS with Homebrew:</p><code>brew install ffmpeg node</code><p class="muted">Active playlists resume when the app restarts. Paused playlists stay paused. Watch Later and saved playlists from other channels are not exposed by the account API.</p>`;
   renderLogin();
+  // Cookie controls are loaded once on opening. OAuth polling must not reset an
+  // unsaved browser choice, optional profile, or selected local file.
+  refreshCookies();
   if (!$("#setup-dialog").open) $("#setup-dialog").showModal();
   refreshLogin();
+}
+
+const browserNames = {
+  firefox: "Firefox",
+  safari: "Safari",
+  chrome: "Chrome",
+  brave: "Brave",
+  chromium: "Chromium",
+  edge: "Edge",
+  opera: "Opera",
+  vivaldi: "Vivaldi",
+  whale: "Whale",
+};
+
+function cookieLabel(settings) {
+  if (settings.mode === "browser")
+    return `${browserNames[settings.browser] || settings.browser}${settings.profile ? ` · ${settings.profile}` : ""}${settings.container ? ` · Container: ${settings.container}` : ""}`;
+  if (settings.mode === "file") return `File: ${settings.filename}`;
+  if (settings.mode === "environment") return settings.environment_label;
+  return "No cookies";
+}
+
+async function refreshCookies() {
+  const container = $("#cookie-controls");
+  container.textContent = "Loading cookie settings…";
+  try {
+    state.cookies = await api("/api/cookies");
+    renderCookies();
+  } catch {
+    container.innerHTML =
+      '<p role="alert">Could not load cookie settings. Close and reopen Account & setup to retry.</p>';
+  }
+}
+
+function renderCookies() {
+  const c = state.cookies;
+  $("#cookie-controls").innerHTML = `
+    <p id="cookie-current" class="cookie-current">Current source: ${escapeHTML(cookieLabel(c))}</p>
+    <form id="cookie-form">
+      <fieldset id="cookie-fields">
+        <label for="cookie-source">Cookie source</label>
+        <select id="cookie-source">
+          <option value="browser">Use a browser</option>
+          <option value="file">Upload cookies.txt</option>
+          <option value="none">No cookies</option>
+          <option value="environment">Use startup defaults</option>
+        </select>
+        <div id="cookie-browser-fields">
+          <label for="cookie-browser">Browser signed in to YouTube</label>
+          <select id="cookie-browser">${c.browsers.map((b) => `<option value="${escapeHTML(b)}">${escapeHTML(browserNames[b] || b)}</option>`).join("")}</select>
+          <p id="cookie-browser-help" class="muted"></p>
+          <details id="cookie-advanced"><summary>Profile & advanced options</summary>
+            <label id="cookie-profile-label" for="cookie-profile">Profile name or path (optional)</label>
+            <input id="cookie-profile" type="text" maxlength="4096" autocomplete="off" spellcheck="false" placeholder="Automatic" value="${escapeHTML(c.profile)}">
+            <div id="cookie-container-field"><label for="cookie-container">Firefox container (optional)</label>
+              <input id="cookie-container" type="text" maxlength="200" autocomplete="off" placeholder="All containers" value="${escapeHTML(c.container)}">
+              <p class="muted">Enter a container name, or “none” for cookies outside containers.</p>
+            </div>
+          </details>
+        </div>
+        <div id="cookie-file-fields" hidden>
+          <label for="cookie-file">Choose Netscape cookies.txt</label>
+          <input id="cookie-file" type="file" accept=".txt,text/plain">
+          <p class="muted">Choose an export from a browser signed in to YouTube, up to 5 MB. Shelf stores a private copy on this computer; your original file stays unchanged.</p>
+        </div>
+        <p id="cookie-none-help" class="muted" hidden>Downloads will run without cookies. Videos that require sign-in may fail.</p>
+        <p id="cookie-environment-help" class="muted" hidden>Startup defaults: ${escapeHTML(c.environment_label)}. This removes your saved override.</p>
+        <button class="button primary" id="cookie-save" type="submit">Save cookie source</button>
+      </fieldset>
+      <p id="cookie-feedback" role="status" aria-live="polite" hidden></p>
+    </form>`;
+  $("#cookie-source").value = c.mode;
+  $("#cookie-browser").value = c.browser;
+  $("#cookie-advanced").open = Boolean(c.profile || c.container);
+  updateCookieFields();
+}
+
+function updateCookieFields() {
+  const mode = $("#cookie-source").value;
+  const browser = $("#cookie-browser").value;
+  $("#cookie-browser-fields").hidden = mode !== "browser";
+  $("#cookie-file-fields").hidden = mode !== "file";
+  $("#cookie-none-help").hidden = mode !== "none";
+  $("#cookie-environment-help").hidden = mode !== "environment";
+  $("#cookie-container-field").hidden = browser !== "firefox";
+  $("#cookie-profile-label").textContent =
+    browser === "safari"
+      ? "Cookie database path (optional)"
+      : "Profile name or path (optional)";
+  $("#cookie-browser-help").textContent =
+    browser === "safari"
+      ? "Safari works on macOS. If access is denied, allow Full Disk Access for the app or terminal running Shelf in System Settings → Privacy & Security. Leave the database path blank for automatic detection."
+      : browser === "firefox"
+        ? "Uses your most recently used Firefox profile by default. You can choose a profile or container below."
+        : "Uses your most recently used profile by default. Your operating system may ask for keychain access when a download starts.";
+  $("#cookie-feedback").hidden = true;
+}
+
+async function saveCookies() {
+  if (state.cookieBusy) return;
+  state.cookieBusy = true;
+  $("#cookie-fields").disabled = true;
+  $("#cookie-save").textContent = "Saving…";
+  const feedback = $("#cookie-feedback");
+  feedback.hidden = true;
+  try {
+    const mode = $("#cookie-source").value;
+    let result;
+    if (mode === "file") {
+      const file = $("#cookie-file").files[0];
+      if (!file && state.cookies.mode !== "file")
+        throw new Error("Choose a cookies.txt file first.");
+      if (file) {
+        if (file.size > 5 * 1024 * 1024)
+          throw new Error("Choose a cookies.txt file smaller than 5 MB.");
+        // Send the file as a bounded raw body, never in a URL, localStorage, or log.
+        const response = await fetch(
+          `/api/cookies/file?filename=${encodeURIComponent(file.name)}`,
+          {
+            method: "POST",
+            headers: { "X-Local-App": "1", "Content-Type": "text/plain" },
+            body: file,
+          },
+        );
+        result = await response.json();
+        if (!response.ok)
+          throw new Error(result.detail || "Could not save the cookies file.");
+      } else result = state.cookies;
+    } else {
+      const browser = $("#cookie-browser").value;
+      result = await api("/api/cookies", "POST", {
+        mode,
+        browser,
+        profile: $("#cookie-profile").value.trim(),
+        container:
+          browser === "firefox" ? $("#cookie-container").value.trim() : "",
+      });
+    }
+    state.cookies = result;
+    if (state.status) {
+      state.status.cookies = result.active;
+      state.status.cookie_settings = result;
+    }
+    $("#cookie-current").textContent = `Current source: ${cookieLabel(result)}`;
+    $("#cookie-file").value = "";
+    feedback.className = "auth-success";
+    feedback.textContent =
+      "Saved. Applies to the next video, without restarting." +
+      (result.mode === "browser"
+        ? " Browser access is checked when a download starts."
+        : "");
+  } catch (error) {
+    feedback.className = "auth-error";
+    feedback.textContent = error.message;
+  } finally {
+    state.cookieBusy = false;
+    $("#cookie-fields").disabled = false;
+    $("#cookie-save").textContent = "Save cookie source";
+    feedback.hidden = false;
+  }
 }
 
 function renderLogin() {
@@ -532,6 +697,15 @@ document.addEventListener("click", async (event) => {
 
 document.addEventListener("change", (event) => {
   const input = event.target;
+  if (input.id === "cookie-source" || input.id === "cookie-browser") {
+    // Profiles belong to a browser; a Firefox profile is not a Safari database.
+    if (input.id === "cookie-browser") {
+      $("#cookie-profile").value = "";
+      $("#cookie-container").value = "";
+    }
+    updateCookieFields();
+    return;
+  }
   if (input.id === "auth-client-file") {
     chooseGoogleClient(input);
     return;
@@ -547,6 +721,12 @@ document.addEventListener("change", (event) => {
       else state.selected.delete(p.id);
     }
     render();
+  }
+});
+document.addEventListener("submit", (event) => {
+  if (event.target.id === "cookie-form") {
+    event.preventDefault();
+    saveCookies();
   }
 });
 $("#search").addEventListener("input", (event) => {

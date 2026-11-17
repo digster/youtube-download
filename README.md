@@ -8,6 +8,8 @@ required. Supported platforms: macOS and Linux.
 ## Features
 
 - Connect or reconnect Google directly from **Account & setup**, without a terminal command.
+- Choose Firefox, Safari, Chrome, or another supported browser for download
+  cookies, or upload cookies.txt directly from **Account & setup**.
 - List your account's owned playlists, including private playlists and Liked videos.
 - Select several playlists to download in a persistent, sequential queue.
 - Pause and resume; unfinished jobs resume after restarting the server. Closing
@@ -100,8 +102,32 @@ up later additions. Resuming uses the saved snapshot, including when offline.
 
 ### Cookies for downloads
 
-OAuth lists playlists; yt-dlp does not use that token to download media. For
-private/restricted videos you can access, set one cookie source in `.env`:
+OAuth lists playlists; yt-dlp uses browser cookies to download videos that need
+sign-in. Open **Account & setup → Private or restricted videos**:
+
+1. Choose **Use a browser**, then select **Firefox**, **Safari**, **Chrome**, Brave,
+   Chromium, Edge, Opera, Vivaldi, or Whale. Sign in to YouTube in that browser.
+   Leave advanced options blank for automatic profile selection. You can specify
+   a profile name/path and, for Firefox, a container name (`none` excludes
+   containers). Safari's optional path points to its cookies database instead.
+2. Alternatively, choose **Upload cookies.txt** and select a Netscape-format
+   export, up to 5 MB. JSON exports and browser database files are not accepted by
+   this file picker. The browser option reads native databases through yt-dlp.
+3. Click **Save cookie source**. Changes persist and apply to the next video
+   without restarting Shelf. A running video keeps its original source. Pause
+   and resume the playlist if you want to apply a change to that video now.
+
+Safari extraction is supported on macOS. If access is denied, grant Full Disk
+Access to the app/terminal running Shelf in **System Settings → Privacy &
+Security**. Chromium browsers may require OS keychain access. Browser access is
+checked when downloading, not when saving preferences. Saving a browser choice
+does not verify that it is installed or signed in. Errors appear on the video's
+library row. The UI uses yt-dlp's supported
+[`--cookies-from-browser` option](https://github.com/yt-dlp/yt-dlp#filesystem-options).
+
+Choose **No cookies** to disable cookies, including any startup default. **Use
+startup defaults** removes the UI override and restores the following optional
+`.env` settings (only one may be set):
 
 ```dotenv
 YTDL_COOKIES_BROWSER=chrome
@@ -109,9 +135,15 @@ YTDL_COOKIES_BROWSER=chrome
 # YTDL_COOKIES_FILE=/absolute/path/to/cookies.txt
 ```
 
-Restart the server after changing `.env`. A browser profile can be specified,
-for example `firefox:default`. Cookie extraction may require local OS/keychain
-access. Cookies, OAuth files, media, and runtime data are excluded from Git.
+Restart the server only if changing `.env`; UI selections take precedence.
+Preferences and the current uploaded cookie text are stored atomically in
+`<YTDL_DATA_DIR>/cookies.json` with owner-only permissions. Status endpoints never
+return cookie contents. Each download uses a temporary private working copy,
+because yt-dlp writes its cookie jar back to disk. This preserves both your
+original export and any replacement uploaded while a download is running.
+Working copies are removed after use; startup removes leftovers from crashes.
+Switching sources replaces the saved upload. Cookies, OAuth files, media, and
+runtime data are excluded from Git.
 
 ## Using the library
 
@@ -180,8 +212,8 @@ Copy `.env.example` to `.env`; all settings are optional.
 | `YTDL_PORT` | `8765` | Loopback HTTP port; CLI `--port` takes precedence |
 | `YTDL_LOG_LEVEL` | `INFO` | Python console and rotating file log level |
 | `YTDL_CLIENT_SECRETS` | empty | Optional Google Desktop OAuth client JSON; otherwise auto-detected |
-| `YTDL_COOKIES_FILE` | empty | Netscape-format cookies for yt-dlp |
-| `YTDL_COOKIES_BROWSER` | empty | Browser/profile for yt-dlp cookie extraction |
+| `YTDL_COOKIES_FILE` | empty | Default Netscape-format cookie file; UI selection overrides it |
+| `YTDL_COOKIES_BROWSER` | empty | Default browser/profile; UI selection overrides it |
 | `YTDL_FORMAT` | `bv*+ba/b` | yt-dlp format selector; best video and audio by default |
 | `YTDL_FINDER_URL` | `https://findyoutubevideo.thetechrobo.ca` | youtubevideofinder API base URL |
 
@@ -216,12 +248,21 @@ Authentication tests cover PKCE, read-only scopes, success/denial, cancelled and
 expired callbacks, duplicate clicks, bad callback state, failed exchanges,
 invalid client files, and atomic token replacement. Browser QA uses a mock
 Google consent page and never alters your real credentials.
+Cookie tests cover every supported browser's actual yt-dlp argument parsing,
+Firefox containers, empty/malformed/oversized files, HttpOnly/session cookies,
+saved-source precedence, disk-write failure, private permissions, and changing
+sources while an earlier snapshot remains active. The localhost integration
+test also verifies that yt-dlp sends an uploaded fixture cookie. Browser QA
+checks file selection, source/profile persistence, polling during edits, and
+mobile layout without reading any real browser cookies.
 
 Additional integration cases to test with your setup:
 
 - Disconnect and reconnect the network during a large fragmented download.
 - Fill or disconnect an external drive, reconnect it, and retry the playlist.
 - Download a private video with browser cookies and an expired browser login.
+- Check Firefox, Safari, and Chrome extraction with your own signed-in profiles;
+  test missing profiles and denied Safari disk/Chrome keychain permissions.
 - Interrupt the server during ffmpeg merging, restart it, and verify playback.
 - Try a large real playlist containing repeated IDs and deleted/private entries.
 - Move a paused playlist across volumes while retaining `.part`, `.ytdl`, and

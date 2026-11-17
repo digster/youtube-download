@@ -13,12 +13,14 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.concurrency import run_in_threadpool
 from google.auth.exceptions import RefreshError
 from youtube_backup.auth import ScopeUpgradeRequired
 
 from .account import Account
 from .auth import GoogleLogin, LoginError, MAX_CONFIG_BYTES
 from .config import PLAYLIST_ID, VIDEO_ID, Settings, contained_file
+from .cookies import CookieError, CookieSettings, MAX_COOKIE_BYTES
 from .downloads import DownloadManager
 from .finder import Finder
 from .store import Store
@@ -31,6 +33,13 @@ class FolderUpdate(BaseModel):
     directory: str = Field(min_length=1, max_length=4096)
 
 
+class CookieUpdate(BaseModel):
+    mode: str = Field(max_length=20)
+    browser: str = Field(default="", max_length=30)
+    profile: str = Field(default="", max_length=4096)
+    container: str = Field(default="", max_length=200)
+
+
 def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
     settings = settings or Settings.from_env()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
@@ -39,7 +48,8 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
     account = account or Account(settings.data_dir)
     login = GoogleLogin(settings, account.save_credentials)
     finder = Finder(store, settings.finder_url)
-    manager = DownloadManager(store, settings, finder)
+    cookies = CookieSettings(settings)
+    manager = DownloadManager(store, settings, finder, cookies)
     operations = Lock()
 
     @asynccontextmanager
@@ -53,6 +63,7 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
                 raise RuntimeError(
                     "Another downloader is already using this data directory."
                 ) from exc
+            cookies.cleanup_sessions()
             if start_worker:
                 manager.start()
             try:
@@ -67,6 +78,7 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
     )
     app.state.store, app.state.manager, app.state.finder = store, manager, finder
     app.state.login = login
+    app.state.cookies = cookies
     app.add_middleware(
         TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "[::1]"]
     )
@@ -143,15 +155,58 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
 
     @app.get("/api/status")
     def status():
+        cookie_status = cookies.status()
         return {
             "account": account.status(),
             "login": login.status(),
             "download_dir": str(settings.download_dir),
             "ffmpeg": bool(shutil.which("ffmpeg")),
             "javascript": bool(shutil.which("node") or shutil.which("deno")),
-            "cookies": bool(settings.cookies_file or settings.cookies_browser),
+            "cookies": cookie_status["active"],
+            "cookie_settings": cookie_status,
             "free_bytes": shutil.disk_usage(settings.download_dir).free,
         }
+
+    @app.get("/api/cookies")
+    def cookie_status():
+        return cookies.status()
+
+    def cookie_call(function, *args):
+        try:
+            return function(*args)
+        except CookieError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except OSError as exc:
+            logger.warning("Could not save cookie settings (%s)", type(exc).__name__)
+            raise HTTPException(
+                500, "Could not save cookies. Check the data folder's permissions."
+            ) from exc
+
+    @app.post("/api/cookies")
+    def configure_cookies(update: CookieUpdate):
+        return cookie_call(
+            cookies.configure,
+            update.mode,
+            update.browser,
+            update.profile,
+            update.container,
+        )
+
+    @app.post("/api/cookies/file")
+    async def upload_cookies(request: Request):
+        content = bytearray()
+        async for chunk in request.stream():
+            if len(content) + len(chunk) > MAX_COOKIE_BYTES:
+                raise HTTPException(413, "Choose a cookies.txt file smaller than 5 MB.")
+            content.extend(chunk)
+        # Validation and durable disk writes must not stall polling while a large
+        # export is uploaded; the cookie service serializes its own state changes.
+        return await run_in_threadpool(
+            cookie_call,
+            cookies.upload,
+            bytes(content),
+            request.query_params.get("filename", "cookies.txt"),
+        )
 
     @app.get("/api/auth/status")
     def login_status():

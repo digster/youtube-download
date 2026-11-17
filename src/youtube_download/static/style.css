@@ -1162,14 +1162,16 @@ video {
 }
 
 /* Keep sign-in feedback above setup details, with controls that wrap on phones. */
-.auth-card {
+.auth-card,
+.cookie-card {
   padding: 20px;
   margin-bottom: 20px;
   border: 1px solid #ceddc8;
   background: #f6f9f2;
   border-radius: 10px;
 }
-.auth-card h3 {
+.auth-card h3,
+.cookie-card h3 {
   margin: 0 0 8px;
   font-size: 17px;
 }
@@ -1194,9 +1196,58 @@ video {
   margin-top: 18px;
   border-top: 1px solid var(--line);
 }
-.auth-card summary {
+.auth-card summary,
+.cookie-card summary {
   font-size: 12px;
   cursor: pointer;
+}
+.cookie-card {
+  background: #fff;
+}
+.cookie-current {
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: #f0f5eb;
+  overflow-wrap: anywhere;
+}
+#cookie-fields {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+#cookie-form label {
+  display: block;
+  margin: 15px 0 7px;
+  font-size: 12px;
+  font-weight: 600;
+}
+#cookie-form select,
+#cookie-form input {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fafbf8;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink);
+}
+#cookie-form select:focus-visible,
+#cookie-form input:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
+#cookie-form details {
+  margin: 14px 0;
+}
+#cookie-save {
+  margin-top: 16px;
+}
+#cookie-feedback {
+  margin-bottom: 0;
 }
 .auth-file-label {
   display: block;

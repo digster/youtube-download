@@ -80,3 +80,21 @@ continue
 ## 2026-11-16 — Google reconnect in the UI
 
 Instead of typing the command, can you implement the Google login reconnecting through the ui?
+
+## 2026-11-16 — Cookie source setup through the UI
+
+Also enable ui flow for setting this file for yt-dlp. For example, in my case it
+could be Firefox or Safari(could also be others).
+
+Reference: screenshot of the existing Private or restricted videos setup text
+requiring YTDL_COOKIES_BROWSER or YTDL_COOKIES_FILE in .env.
+
+make sure to add support for atleast firefox/safari/chrome
+
+The assistant initially left these changes uncommitted after applying the
+general AGENTS.md guidance; the correction below confirms the explicit request
+to commit on the user's behalf.
+
+## 2026-11-16 — Commit authorization reminder
+
+I had asked you to do the commits for me.

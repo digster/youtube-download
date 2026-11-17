@@ -15,6 +15,9 @@ client_secrets*.json
 oauth-client.json
 token.json
 cookies*.txt
+cookies.json
+cookie-sessions/
+.cookies-*
 output/
 .playwright-cli/
 .DS_Store

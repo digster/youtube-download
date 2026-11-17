@@ -12,6 +12,7 @@ Browser: static/index.html + app.js + style.css
   ├─ GET /api/playlists, /api/playlists/:id (poll every 2 seconds)
   ├─ POST sync, refresh, download, pause, folder, find
   ├─ POST /api/auth/start, /config, /cancel; GET /api/auth/status
+  ├─ GET/POST /api/cookies; POST /api/cookies/file
   ├─ Google system-browser consent → GET /auth/callback → Shelf
   └─ GET video/file (FileResponse supports HTTP ranges)
                   │
@@ -48,6 +49,10 @@ Browser: static/index.html + app.js + style.css
   time with explicit options, no shell, no external yt-dlp configuration, and no
   user plugins. Files are named by video ID, so title changes and reordering do
   not change the resume destination. Each playlist has its own physical copies.
+- `cookies.py` owns live cookie preferences, upload validation, and per-video
+  snapshots. `app.py` and `DownloadManager` share one instance. The manager takes
+  a fresh snapshot before each subprocess, so settings changes apply without
+  mutating the frozen startup Settings or interrupting an in-flight video.
 - `runner.py` holds an exclusive per-video filesystem lock and watches its
   parent's PID. If the app is hard-killed, the runner terminates its process
   group, including ffmpeg. The file lock prevents a restarted app from writing
@@ -116,6 +121,33 @@ account syncs are retained too. Changing accounts therefore does not erase a
 previous local library; account separation is not implemented.
 
 ## Local security and frontend
+
+### Download cookies
+
+`GET /api/cookies` returns source metadata only. `POST /api/cookies` selects a
+browser/profile/container, explicitly disables cookies, or restores startup
+defaults. `POST /api/cookies/file` accepts a raw Netscape cookie file with a
+streamed 5 MB cap. Its filename query is a display label, never a disk path.
+These mutations use the existing local-app header and origin protections.
+
+UI preferences override cookie environment variables. The active selection and
+any uploaded contents are one atomically replaced, mode-0600 `data/cookies.json`;
+failed validation or writes preserve the prior source. Switching to another
+source discards the saved upload. Browser extraction is deferred to yt-dlp at
+download time, using an allowlist of supported browsers and separate optional
+profile/container fields. Settings APIs do not open browser databases.
+
+yt-dlp reads **and writes** `--cookies`, so a context manager creates a private
+working file under `data/cookie-sessions/` for each video, including when using
+an environment-provided export. Changing the selection cannot alter that file;
+yt-dlp cannot overwrite a newer upload or the original export. Cleanup includes
+launch failures and interrupted jobs. Startup removes stale sessions only after
+acquiring the exclusive server lock. Cookie records are validated without using
+yt-dlp's permissive loader, whose malformed-record warnings include raw values.
+
+The setup form keeps cookie drafts independent of OAuth status polling. It shows
+the saved source separately from the selection being edited. Changing browsers
+clears profile/container drafts to avoid applying one browser's path to another.
 
 ### Google reconnect
 

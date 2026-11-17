@@ -18,6 +18,7 @@ from youtube_download.downloads import (
     completed_file,
     error_status,
 )
+from youtube_download.cookies import CookieSettings
 
 
 def wait_for(predicate, timeout=8):
@@ -163,7 +164,8 @@ def test_process_launch_failure_does_not_leave_video_downloading(
 @pytest.mark.skipif(
     not shutil.which("ffmpeg"), reason="ffmpeg is required for real media verification"
 )
-def test_real_yt_dlp_subprocess_downloads_local_media(settings, tmp_path):
+@pytest.mark.parametrize("with_cookies", [False, True])
+def test_real_yt_dlp_subprocess_downloads_local_media(settings, tmp_path, with_cookies):
     source = tmp_path / "fixture.mp4"
     subprocess.run(
         [
@@ -183,22 +185,42 @@ def test_real_yt_dlp_subprocess_downloads_local_media(settings, tmp_path):
         ],
         check=True,
     )
+    request_cookies = []
+
+    class FixtureHandler(SimpleHTTPRequestHandler):
+        def do_GET(self):
+            request_cookies.append(self.headers.get("Cookie", ""))
+            super().do_GET()
+
     server = ThreadingHTTPServer(
-        ("127.0.0.1", 0), partial(SimpleHTTPRequestHandler, directory=str(tmp_path))
+        ("127.0.0.1", 0), partial(FixtureHandler, directory=str(tmp_path))
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    cookies = CookieSettings(settings)
+    if with_cookies:
+        cookies.upload(
+            b"# Netscape HTTP Cookie File\n127.0.0.1\tFALSE\t/\tFALSE\t0\tfixture\ttest-value\n",
+            "fixture-cookies.txt",
+        )
     try:
-        command = build_command(settings, PID, VID)
-        command[-1] = f"http://127.0.0.1:{server.server_port}/fixture.mp4"
-        result = subprocess.run(command, capture_output=True, text=True, timeout=25)
-        assert result.returncode == 0, result.stderr + result.stdout
-        path = completed_file(settings, PID, VID)
-        assert path and path.read_bytes() == source.read_bytes()
-        modified = path.stat().st_mtime_ns
-        result = subprocess.run(command, capture_output=True, text=True, timeout=25)
-        assert result.returncode == 0, result.stderr
-        assert path.stat().st_mtime_ns == modified
+        with cookies.snapshot() as current:
+            command = build_command(current, PID, VID)
+            command[-1] = f"http://127.0.0.1:{server.server_port}/fixture.mp4"
+            result = subprocess.run(command, capture_output=True, text=True, timeout=25)
+            assert result.returncode == 0, result.stderr + result.stdout
+            path = completed_file(settings, PID, VID)
+            assert path and path.read_bytes() == source.read_bytes()
+            modified = path.stat().st_mtime_ns
+            result = subprocess.run(command, capture_output=True, text=True, timeout=25)
+            assert result.returncode == 0, result.stderr
+            assert path.stat().st_mtime_ns == modified
+            if with_cookies:
+                assert request_cookies and all(
+                    "fixture=test-value" in value for value in request_cookies
+                )
+            else:
+                assert not any(request_cookies)
     finally:
         server.shutdown()
         server.server_close()

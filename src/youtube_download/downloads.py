@@ -12,6 +12,7 @@ import threading
 import time
 
 from .config import PLAYLIST_ID, VIDEO_ID, contained_file
+from .cookies import CookieError, CookieSettings
 from .store import now
 
 logger = logging.getLogger(__name__)
@@ -119,8 +120,9 @@ def error_status(message: str) -> str:
 
 
 class DownloadManager:
-    def __init__(self, store, settings, finder):
+    def __init__(self, store, settings, finder, cookies=None):
         self.store, self.settings, self.finder = store, settings, finder
+        self.cookies = cookies or CookieSettings(settings)
         self.stop = threading.Event()
         self.wake = threading.Event()
         self.lock = threading.RLock()
@@ -267,8 +269,20 @@ class DownloadManager:
                 )
 
     def _download_video(self, playlist_id, video_id):
+        try:
+            with self.cookies.snapshot() as settings:
+                self._download_video_with_settings(playlist_id, video_id, settings)
+        except CookieError as exc:
+            with self.lock:
+                if not self._interrupted(playlist_id):
+                    self.store.update_video(
+                        playlist_id, video_id, status="failed", error=str(exc)
+                    )
+            logger.warning("Cookie setup prevented download of %s", video_id)
+
+    def _download_video_with_settings(self, playlist_id, video_id, settings):
         directory = self.store.playlist_directory(playlist_id)
-        command = build_command(self.settings, playlist_id, video_id, directory)
+        command = build_command(settings, playlist_id, video_id, directory)
         with self.lock:
             if self._interrupted(playlist_id):
                 return
