@@ -150,6 +150,32 @@ To avoid Full Disk Access when that folder remains blocked, use **Upload
 cookies.txt** with a Netscape-format export. This passes only the selected file
 contents to Shelf; do not select `cookies.sqlite` in the cookies.txt picker.
 
+#### Export YouTube cookies from Firefox without Full Disk Access
+
+1. In Firefox, install [cookies.txt by Lennon Hill](https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/),
+   an exporter linked from [yt-dlp's FAQ](https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp).
+   It requests access to website data; you can remove it after exporting.
+2. Open `about:addons`, select **Extensions → cookies.txt**, and set **Run in
+   Private Windows → Allow**. See [Mozilla's instructions](https://support.mozilla.org/en-US/kb/extensions-private-browsing).
+3. Close any existing private windows. Open a fresh private window with
+   **Command-Shift-P**, visit YouTube, and sign in to the account with access to
+   your videos. In that same tab, open <https://www.youtube.com/robots.txt>.
+4. Open the cookies.txt extension from Firefox's extensions/toolbar menu. Click
+   **Download** beside **Current Container and Site**. This selects the current
+   tab's cookie store and site, rather than every site's cookies. Save the `.txt`
+   file to Downloads; a name such as `cookies.firefox-private.txt` is valid.
+5. After the file has saved, close the private window without signing out first.
+   This follows [yt-dlp's YouTube cookie export guidance](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies)
+   to reduce cookie rotation from continued browser use of the exported session.
+6. In Shelf, open **Account & setup → Private or restricted videos**, choose
+   **Upload cookies.txt**, select the exported file, and click **Save cookie source**.
+   Return to the playlist and click **Resume / retry**. No server restart is needed.
+
+The export contains sign-in credentials. Keep it local and upload it only to your
+local Shelf app, not to chat or a public site. Shelf keeps its own private copy,
+so the exported download can be deleted after a successful save. If YouTube later
+rejects the saved login, export a fresh session and replace the uploaded file.
+
 Choose **No cookies** to disable cookies, including any startup default. **Use
 startup defaults** removes the UI override and restores the following optional
 `.env` settings (only one may be set):

@@ -127,3 +127,11 @@ this is the path - /Users/ishan/Library/Application Support/Firefox/Profiles/ldb
 What should I do now?
 
 Can I give access to that specific profile path?
+
+## 2026-11-17 — Help exporting and uploading cookies
+
+Help me with this step.
+
+Attached screenshot highlights the previous instructions to upload a
+Netscape-format cookies.txt export when direct browser access remains blocked,
+then save the cookie source and resume/retry the playlist.
