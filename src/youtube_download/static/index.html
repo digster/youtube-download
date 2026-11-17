@@ -60,7 +60,10 @@
               keep.
             </p>
           </div>
-          <div id="page-actions">
+          <div id="page-actions" class="heading-actions">
+            <button class="button secondary" data-action="create-playlist">
+              + Create playlist
+            </button>
             <button class="button primary" data-action="sync">
               ↻ <span>Sync playlists</span>
             </button>
@@ -75,7 +78,9 @@
           <div class="collection-header">
             <div>
               <h2 id="collection-title">All playlists</h2>
-              <p id="collection-description">From your YouTube account</p>
+              <p id="collection-description">
+                Your YouTube and custom playlists
+              </p>
             </div>
             <label class="search"
               ><span aria-hidden="true">⌕</span
@@ -109,6 +114,60 @@
         ↓ Download selected
       </button>
     </div>
+    <dialog id="create-dialog" aria-labelledby="create-title">
+      <div class="dialog-heading">
+        <h2 id="create-title">Create a custom playlist</h2>
+        <button
+          class="icon-button"
+          data-close
+          aria-label="Close playlist creation"
+        >
+          ×
+        </button>
+      </div>
+      <p>
+        Collect YouTube videos in a playlist saved on this computer. No Google
+        connection is required.
+      </p>
+      <form id="create-form">
+        <fieldset id="create-fields">
+          <label for="create-name">Playlist name</label>
+          <input
+            id="create-name"
+            name="title"
+            required
+            maxlength="200"
+            autocomplete="off"
+            placeholder="Weekend watchlist"
+          />
+          <label for="create-urls">YouTube video URLs</label>
+          <textarea
+            id="create-urls"
+            name="urls"
+            required
+            rows="7"
+            maxlength="200000"
+            spellcheck="false"
+            placeholder="https://www.youtube.com/watch?v=…&#10;https://youtu.be/…"
+            aria-describedby="create-help"
+          ></textarea>
+          <p id="create-help" class="muted">
+            One URL per line, up to 500 videos. Watch, Shorts, live, and share
+            links work. Duplicates are removed, keeping your order. Video titles
+            appear after downloading.
+          </p>
+          <div class="heading-actions">
+            <button class="button primary" id="create-submit" type="submit">
+              Create playlist
+            </button>
+            <button class="button secondary" type="button" data-close>
+              Cancel
+            </button>
+          </div>
+        </fieldset>
+        <p id="create-error" class="auth-error" role="alert" hidden></p>
+      </form>
+    </dialog>
     <dialog id="setup-dialog" aria-labelledby="setup-title">
       <div class="dialog-heading">
         <h2 id="setup-title">Account & setup</h2>

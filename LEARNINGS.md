@@ -3,8 +3,9 @@
 - A yt-dlp filename existing on disk does not prove completion: separate format
   streams and interrupted merges can look like finished videos. Use an
   `after_move` receipt plus a nonempty file check.
-- Keep IDs, not titles or playlist positions, in output paths. Otherwise renames
-  and reorders break partial-file resume.
+- Keep video IDs, not titles or positions, in file/subfolder paths. Readable
+  playlist roots must be allocated once and persisted; recomputing them from
+  titles on sync breaks partial-file resume after a rename.
 - Store media paths relative to the playlist root. Completion receipts from
   yt-dlp contain absolute paths, so resolve the recorded basename under the
   current video directory when reconnecting a moved folder.
@@ -36,3 +37,8 @@
   unreadable Firefox profile directory can therefore report a missing database.
   Use explicit directory enumeration when diagnosing; pathlib glob and
   ConfigParser.read can also hide permission errors.
+- Filename limits can count UTF-8 bytes rather than characters. Cap both when
+  allocating readable playlist folders so long emoji titles remain usable.
+- Metadata sidecars enrich a verified download but do not establish completion.
+  Keep optional metadata access inside error handling, including containment
+  checks, so missing or unreadable metadata cannot fail completed media.

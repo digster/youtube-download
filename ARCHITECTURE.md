@@ -11,6 +11,7 @@ files are deliberately separate from versioned source.
 Browser: static/index.html + app.js + style.css
   ├─ GET /api/playlists, /api/playlists/:id (poll every 2 seconds)
   ├─ POST sync, refresh, download, pause, folder, find
+  ├─ POST /api/playlists/custom (local URL list → saved membership)
   ├─ POST /api/auth/start, /config, /cancel; GET /api/auth/status
   ├─ GET/POST /api/cookies; POST /api/cookies/file
   ├─ Google system-browser consent → GET /auth/callback → Shelf
@@ -45,6 +46,12 @@ Browser: static/index.html + app.js + style.css
   verification. Connections are short-lived and never shared between request
   threads and the worker. WAL permits reads during writes. A completed remote
   snapshot is fetched before the sync transaction begins.
+- `custom_playlists.py` validates pasted video links against known YouTube
+  hosts and URL forms, keeps only canonical video IDs, and deduplicates in input
+  order. It never fetches user-supplied URLs. `/api/playlists/custom` validates
+  the whole list before atomically creating its header and membership in SQLite.
+  The `source` column distinguishes `custom` from `youtube`; custom membership
+  is immediately ready, bypasses Google during queueing, and rejects remote refresh.
 - `downloads.py` owns scheduling and process control. It launches one video at a
   time with explicit options, no shell, no external yt-dlp configuration, and no
   user plugins. Files are named by video ID, so title changes and reordering do
@@ -94,6 +101,12 @@ without transferring again. An arbitrary `.mp4` or `.info.json` alone is not a
 completion signal: it may be an unmerged stream. The GUI checks files on disk,
 so a missing completed file stops counting as downloaded and can be retried.
 
+Custom videos start with ID-based labels. After verifying completion,
+`DownloadManager._save_file` reads a contained, size-limited yt-dlp `.info.json`
+sidecar with a matching video ID to enrich title/channel. Missing or malformed
+metadata never invalidates completed media. Receipt reconciliation uses the
+same path, so metadata can also be recovered after interruption.
+
 Failures such as HTTP 429, network errors, or bot challenges remain retryable
 `failed` states. Explicit private/deleted/unavailable errors trigger archive
 lookup. Known deleted/private entries in an API snapshot are also looked up
@@ -102,7 +115,12 @@ automatically refresh remote playlist contents; that is a separate action.
 
 ## Folder changes and retained data
 
-The default playlist directory is `<YTDL_DOWNLOAD_DIR>/<playlist_id>`.
+New playlist directories are allocated once as
+`<YTDL_DOWNLOAD_DIR>/<sanitized title> - <6 hex characters>` and persisted in
+`playlists.download_dir`. `Store._new_playlist_directory` caps both title length
+and UTF-8 bytes, retries filesystem/database collisions, and defers directory
+creation until downloading. Existing rows are not renamed: rows without a saved
+directory retain the legacy `<YTDL_DOWNLOAD_DIR>/<playlist_id>` fallback.
 Every video's recorded path is relative to that playlist directory, such as
 `<video_id>/<video_id>.mp4`. The folder API changes only the playlist's absolute
 root and immediately rechecks local availability. It never moves files.
@@ -184,6 +202,12 @@ filesystem paths. OAuth/token contents are never sent to the client.
 
 The frontend uses ordinary links for playlist pages, native dialogs, responsive
 cards, accessible controls, local video playback, and a selection toolbar.
+Playlist summaries expose a canonical YouTube playlist URL for synced sources
+only; cards and library headings link to it. All video rows link to their
+original YouTube URL independently of download status or local playback.
+The custom playlist dialog preserves input on validation failure and disables
+submission while creating. It makes no account request and does not auto-start
+downloads. Successful creation navigates to the resulting local library.
 Two-second polling stops when the document is hidden and avoids overlapping
 requests. Polls preserve focused card controls; dialogs/search remain outside
 the rerendered list. Download work continues independently of the tab.
@@ -209,7 +233,7 @@ the setup dialog and directs the user to the reconnect button.
 - Runtime logs are rotated at 2 MB with three backups. SQLite, downloads,
   cookies, credentials, `.env`, logs, and browser artifacts are ignored by Git.
 
-The schema is created idempotently. The folder-override column has an additive
-compatibility migration in `Store.__init__`; there is no external migration
+The schema is created idempotently. The folder-override and source columns have
+additive compatibility migrations in `Store.__init__`; there is no external migration
 framework. The advisory API quota file is app-local; Google's real project
 quota is shared with other tools using the same OAuth client.

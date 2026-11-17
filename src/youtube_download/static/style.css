@@ -515,6 +515,17 @@ h2 {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.playlist-source {
+  display: inline-block;
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--green);
+  text-underline-offset: 3px;
+}
+.playlist-source:hover,
+.playlist-source:focus-visible {
+  text-decoration: underline;
+}
 .status-line {
   display: flex;
   justify-content: space-between;
@@ -728,6 +739,8 @@ h2 {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 .video-actions .badge {
   font-size: 10px;
@@ -1129,17 +1142,39 @@ video {
     transition: none !important;
   }
 }
-#folder-form label {
+#folder-form label,
+#create-form label {
   display: block;
   font-size: 12px;
   margin: 22px 0 9px;
 }
-#folder-path {
+#folder-path,
+#create-name,
+#create-urls {
   width: 100%;
   padding: 12px;
   border: 1px solid var(--line);
   background: #fafbf8;
   font-size: 12px;
+  border-radius: 6px;
+}
+#create-fields {
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  border: 0;
+}
+#create-urls {
+  resize: vertical;
+  line-height: 1.7;
+}
+#create-name:focus-visible,
+#create-urls:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
+#create-form .heading-actions {
+  margin-top: 20px;
 }
 #folder-error {
   color: var(--danger);

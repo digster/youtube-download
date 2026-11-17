@@ -37,6 +37,7 @@ const state = {
   loginBusy: false,
   cookies: null,
   cookieBusy: false,
+  creatingPlaylist: false,
 };
 const labels = {
   idle: "Not started",
@@ -68,6 +69,12 @@ const needsAttention = (p) =>
   ["error", "completed_with_errors", "paused"].includes(p.state) ||
   (p.items_synced_at && p.state === "completed" && p.downloaded < p.total);
 const apiPath = (id = playlistId) => `/api/playlists/${encodeURIComponent(id)}`;
+
+// Custom lists exist only in Shelf; only synced lists have a YouTube source.
+const playlistSourceLink = (playlist, className) =>
+  playlist.source === "youtube" && safeURL(playlist.youtube_url)
+    ? `<a class="${className}" href="${safeURL(playlist.youtube_url)}" target="_blank" rel="noopener noreferrer" aria-label="Open ${escapeHTML(playlist.title)} playlist on YouTube (new tab)">YouTube playlist ↗</a>`
+    : "";
 
 async function api(path, method = "GET", body) {
   const response = await fetch(path, {
@@ -173,7 +180,7 @@ function renderPlaylists() {
   const shown = visiblePlaylists();
   if (!playlists.length) {
     $("#content").innerHTML =
-      `<div class="empty"><div class="empty-icon">▤</div><h3>A home for your playlists.</h3><p>Sync your YouTube account to choose the playlists you want to keep. Downloads and progress will appear here.</p><button class="button primary" data-action="sync">↻ Sync playlists</button> <button class="button quiet" data-action="setup">Account setup ↗</button></div>`;
+      `<div class="empty"><div class="empty-icon">▤</div><h3>A home for your playlists.</h3><p>Create a playlist from video URLs, or sync your YouTube account. Downloads and progress will appear here.</p><button class="button primary" data-action="create-playlist">+ Create playlist</button> <button class="button secondary" data-action="sync">↻ Sync playlists</button> <button class="button quiet" data-action="setup">Account setup ↗</button></div>`;
   } else if (!shown.length) {
     $("#content").innerHTML =
       '<div class="empty"><div class="empty-icon">⌕</div><h3>Nothing here just yet.</h3><p>No playlists match this view. Try a different filter or search.</p></div>';
@@ -192,7 +199,7 @@ function renderPlaylists() {
           : 0;
         return `<article class="card ${state.selected.has(p.id) ? "selected" : ""}">
         <div class="card-top"><div class="art-fallback" aria-hidden="true">▤</div>${safeURL(p.thumbnail) ? `<img src="${safeURL(p.thumbnail)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ""}<label class="card-check"><input type="checkbox" data-select="${escapeHTML(p.id)}" data-focus="select-${escapeHTML(p.id)}" aria-label="Select ${escapeHTML(p.title)}" ${state.selected.has(p.id) ? "checked" : ""}></label><span class="video-count">▤ &nbsp;${p.total} videos</span></div>
-        <div class="card-body"><a class="card-title" href="/playlists/${encodeURIComponent(p.id)}" title="${escapeHTML(p.title)}">${escapeHTML(p.title)}</a><div class="card-meta"><span>${escapeHTML(p.channel || "Your YouTube account")}</span><span>${escapeHTML(p.privacy || "Playlist")}</span></div><div class="status-line">${badge(p.state)}<span>${p.downloaded} of ${p.total} saved</span></div><progress class="progress" max="100" value="${percent}" aria-label="${escapeHTML(p.title)} download progress">${percent}%</progress><div class="card-footer"><a class="library-link" href="/playlists/${encodeURIComponent(p.id)}">View library <span>↗</span></a>${downloadButton(p, true)}</div></div>
+        <div class="card-body"><a class="card-title" href="/playlists/${encodeURIComponent(p.id)}" title="${escapeHTML(p.title)}">${escapeHTML(p.title)}</a><div class="card-meta"><span>${escapeHTML(p.channel || "Your YouTube account")}</span><span>${escapeHTML(p.privacy || "Playlist")}</span></div>${playlistSourceLink(p, "playlist-source")}<div class="status-line">${badge(p.state)}<span>${p.downloaded} of ${p.total} saved</span></div><progress class="progress" max="100" value="${percent}" aria-label="${escapeHTML(p.title)} download progress">${percent}%</progress><div class="card-footer"><a class="library-link" href="/playlists/${encodeURIComponent(p.id)}">View library <span>↗</span></a>${downloadButton(p, true)}</div></div>
       </article>`;
       })
       .join("")}</div>`;
@@ -213,7 +220,7 @@ function renderDetail() {
     "Your playlist and its local videos, together in one place.";
   $("#page-description").className = "detail-description";
   $("#page-actions").innerHTML =
-    `<div class="heading-actions"><button class="button secondary" data-action="refresh" data-id="${escapeHTML(p.id)}" ${active(p) || state.busy.has(p.id) ? "disabled" : ""}>↻ Refresh videos</button>${downloadButton(p)}</div>`;
+    `<div class="heading-actions">${playlistSourceLink(p, "button secondary")}${p.source === "custom" ? '<span class="badge">Custom playlist</span>' : `<button class="button secondary" data-action="refresh" data-id="${escapeHTML(p.id)}" ${active(p) || state.busy.has(p.id) ? "disabled" : ""}>↻ Refresh videos</button>`}${downloadButton(p)}</div>`;
   stats([
     ["Playlist videos", p.total],
     ["Videos on disk", p.local_count],
@@ -247,10 +254,9 @@ function renderDetail() {
     content +=
       '<div class="empty"><div class="empty-icon">▤</div><h3>Bring the playlist into view.</h3><p>Load its video list to see what is available, then start a download when you are ready.</p><button class="button primary" data-action="refresh">↻ Load videos</button></div>';
   else if (!shown.length)
-    content +=
-      '<div class="empty"><div class="empty-icon">▤</div><h3>No videos in this view.</h3><p>Try another filter, or refresh the playlist to check for new videos.</p></div>';
+    content += `<div class="empty"><div class="empty-icon">▤</div><h3>No videos in this view.</h3><p>${p.source === "custom" ? "Try another filter or search." : "Try another filter, or refresh the playlist to check for new videos."}</p></div>`;
   else
-    content += `<div class="video-list">${shown.map((v) => `<article class="video-row"><div class="video-thumb"><div class="art-fallback" aria-hidden="true">▷</div>${safeURL(v.thumbnail) ? `<img src="${safeURL(v.thumbnail)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ""}</div><div class="video-info"><h3>${escapeHTML(v.title)}</h3><p>${escapeHTML(v.channel || v.id)}${v.local_available ? ` · ${bytes(v.size)}` : ""}${!v.in_playlist ? '<span class="removed-label">Removed from playlist · kept locally</span>' : ""}</p>${v.error ? `<details><summary>Download details</summary><p>${escapeHTML(v.error)}</p></details>` : ""}</div><div class="video-actions">${badge(v.local_available ? "downloaded" : v.status)}${v.local_available ? `<button class="button secondary small" data-action="play" data-video="${escapeHTML(v.id)}">▷ Play</button>` : ["unavailable", "failed"].includes(v.status) ? `<button class="button secondary small" data-action="find" data-video="${escapeHTML(v.id)}">${v.recovery ? "Archive links ↗" : "Find archives ↗"}</button>` : `<a class="button quiet small" target="_blank" rel="noopener noreferrer" href="https://www.youtube.com/watch?v=${encodeURIComponent(v.id)}">YouTube ↗</a>`}</div></article>`).join("")}</div>`;
+    content += `<div class="video-list">${shown.map((v) => `<article class="video-row"><div class="video-thumb"><div class="art-fallback" aria-hidden="true">▷</div>${safeURL(v.thumbnail) ? `<img src="${safeURL(v.thumbnail)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ""}</div><div class="video-info"><h3>${escapeHTML(v.title)}</h3><p>${escapeHTML(v.channel || v.id)}${v.local_available ? ` · ${bytes(v.size)}` : ""}${!v.in_playlist ? '<span class="removed-label">Removed from playlist · kept locally</span>' : ""}</p>${v.error ? `<details><summary>Download details</summary><p>${escapeHTML(v.error)}</p></details>` : ""}</div><div class="video-actions">${badge(v.local_available ? "downloaded" : v.status)}${v.local_available ? `<button class="button secondary small" data-action="play" data-video="${escapeHTML(v.id)}">▷ Play</button>` : ["unavailable", "failed"].includes(v.status) ? `<button class="button secondary small" data-action="find" data-video="${escapeHTML(v.id)}">${v.recovery ? "Archive links ↗" : "Find archives ↗"}</button>` : ""}<a class="button quiet small" target="_blank" rel="noopener noreferrer" href="https://www.youtube.com/watch?v=${encodeURIComponent(v.id)}" aria-label="Open ${escapeHTML(v.title)} on YouTube (new tab)">YouTube ↗</a></div></article>`).join("")}</div>`;
   $("#content").innerHTML = content;
 }
 
@@ -606,6 +612,12 @@ document.addEventListener("click", async (event) => {
   if (!button || button.disabled) return;
   const action = button.dataset.action;
   const id = button.dataset.id || playlistId;
+  if (action === "create-playlist") {
+    $("#create-error").hidden = true;
+    $("#create-dialog").showModal();
+    $("#create-name").focus();
+    return;
+  }
   if (action === "setup") {
     setup();
     return;
@@ -756,6 +768,30 @@ $("#folder-form").addEventListener("submit", async (event) => {
     $("#folder-error").hidden = false;
   } finally {
     button.disabled = false;
+  }
+});
+$("#create-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (state.creatingPlaylist) return;
+  state.creatingPlaylist = true;
+  $("#create-fields").disabled = true;
+  $("#create-submit").textContent = "Creating…";
+  $("#create-error").hidden = true;
+  try {
+    // Persist the whole validated list before navigating. Validation failures
+    // leave the draft intact, including line breaks used by server error messages.
+    const data = await api("/api/playlists/custom", "POST", {
+      title: $("#create-name").value.trim(),
+      urls: $("#create-urls").value,
+    });
+    location.assign(`/playlists/${encodeURIComponent(data.playlist.id)}`);
+  } catch (error) {
+    $("#create-error").textContent = error.message;
+    $("#create-error").hidden = false;
+  } finally {
+    state.creatingPlaylist = false;
+    $("#create-fields").disabled = false;
+    $("#create-submit").textContent = "Create playlist";
   }
 });
 // Broken remote thumbnails should fall back to the local artwork, never leave a

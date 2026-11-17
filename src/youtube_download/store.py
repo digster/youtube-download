@@ -4,9 +4,13 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
+import secrets
 import sqlite3
+from urllib.parse import quote
+from uuid import uuid4
 
-from .config import contained_file
+from .config import VIDEO_ID, contained_file
 
 
 def now() -> str:
@@ -26,7 +30,8 @@ class Store:
                     thumbnail TEXT DEFAULT '', channel TEXT DEFAULT '', privacy TEXT DEFAULT '',
                     item_count INTEGER DEFAULT 0, synced_at TEXT, items_synced_at TEXT,
                     state TEXT DEFAULT 'idle', error TEXT DEFAULT '', queued_at TEXT,
-                    current_video TEXT, progress REAL DEFAULT 0, download_dir TEXT DEFAULT ''
+                    current_video TEXT, progress REAL DEFAULT 0, download_dir TEXT DEFAULT '',
+                    source TEXT NOT NULL DEFAULT 'youtube'
                 );
                 CREATE TABLE IF NOT EXISTS videos (
                     playlist_id TEXT NOT NULL REFERENCES playlists(id), id TEXT NOT NULL,
@@ -43,6 +48,10 @@ class Store:
             if "download_dir" not in columns:
                 db.execute(
                     "ALTER TABLE playlists ADD COLUMN download_dir TEXT DEFAULT ''"
+                )
+            if "source" not in columns:
+                db.execute(
+                    "ALTER TABLE playlists ADD COLUMN source TEXT NOT NULL DEFAULT 'youtube'"
                 )
 
     def playlist_directory(self, playlist_id: str) -> Path:
@@ -69,16 +78,92 @@ class Store:
     def sync_playlists(self, playlists: list[dict]):
         with self.connect() as db:
             for playlist in playlists:
+                existing = db.execute(
+                    "SELECT id FROM playlists WHERE id=?", (playlist["id"],)
+                ).fetchone()
+                directory = (
+                    ""
+                    if existing
+                    else self._new_playlist_directory(db, playlist["title"])
+                )
                 db.execute(
                     """
-                    INSERT INTO playlists(id,title,description,thumbnail,channel,privacy,item_count,synced_at)
-                    VALUES(:id,:title,:description,:thumbnail,:channel,:privacy,:item_count,:synced_at)
+                    INSERT INTO playlists(id,title,description,thumbnail,channel,privacy,item_count,synced_at,download_dir)
+                    VALUES(:id,:title,:description,:thumbnail,:channel,:privacy,:item_count,:synced_at,:download_dir)
                     ON CONFLICT(id) DO UPDATE SET title=excluded.title, description=excluded.description,
                     thumbnail=excluded.thumbnail, channel=excluded.channel, privacy=excluded.privacy,
                     item_count=excluded.item_count, synced_at=excluded.synced_at
+                    WHERE playlists.source='youtube'
                 """,
-                    {**playlist, "synced_at": now()},
+                    {**playlist, "synced_at": now(), "download_dir": directory},
                 )
+
+    def _new_playlist_directory(self, db, title: str) -> str:
+        # Only allocate once. Renames and syncs must not detach .part files or
+        # downloaded media. Old rows with no override keep their legacy ID folder.
+        name = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', " ", title)
+        name = " ".join(name.split()).strip(" .")[:100]
+        # Filesystem component limits count bytes on Linux; emoji and other
+        # multibyte titles need a byte cap as well as a readable character cap.
+        name = (
+            name.encode("utf-8")[:180].decode("utf-8", errors="ignore").rstrip(" .")
+            or "Playlist"
+        )
+        for _ in range(20):
+            path = self.download_dir.resolve() / f"{name} - {secrets.token_hex(3)}"
+            if (
+                not path.exists()
+                and not path.is_symlink()
+                and not db.execute(
+                    "SELECT 1 FROM playlists WHERE download_dir=?", (str(path),)
+                ).fetchone()
+            ):
+                return str(path)
+        raise RuntimeError("Could not allocate a unique playlist folder")
+
+    def create_custom_playlist(self, title: str, video_ids: list[str]) -> str:
+        title = title.strip()
+        if not title or len(title) > 200:
+            raise ValueError("Enter a playlist name between 1 and 200 characters.")
+        ids = list(dict.fromkeys(video_ids))
+        if not ids or any(not VIDEO_ID.fullmatch(value) for value in ids):
+            raise ValueError("A custom playlist requires valid YouTube video IDs.")
+        playlist_id = f"custom_{uuid4().hex}"
+        timestamp = now()
+        # The header and full membership become visible together. Mark the local
+        # snapshot ready now so downloads never ask Google for this synthetic ID.
+        with self.connect() as db:
+            directory = self._new_playlist_directory(db, title)
+            db.execute(
+                """INSERT INTO playlists(id,title,description,channel,privacy,item_count,
+                   synced_at,items_synced_at,source,download_dir) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    playlist_id,
+                    title,
+                    "A custom playlist saved on this computer.",
+                    "Custom playlist",
+                    "Local",
+                    len(ids),
+                    timestamp,
+                    timestamp,
+                    "custom",
+                    directory,
+                ),
+            )
+            db.executemany(
+                "INSERT INTO videos(playlist_id,id,title,position,thumbnail) VALUES(?,?,?,?,?)",
+                [
+                    (
+                        playlist_id,
+                        value,
+                        f"YouTube video · {value}",
+                        position,
+                        f"https://i.ytimg.com/vi/{value}/hqdefault.jpg",
+                    )
+                    for position, value in enumerate(ids)
+                ],
+            )
+        return playlist_id
 
     def sync_videos(self, playlist_id: str, videos: list[dict]):
         # Fetch the entire remote snapshot before this transaction: a failed API page
@@ -138,6 +223,9 @@ class Store:
         current = [v for v in videos if v["in_playlist"]]
         return {
             **dict(row),
+            "youtube_url": f"https://www.youtube.com/playlist?list={quote(row['id'], safe='')}"
+            if row["source"] == "youtube"
+            else None,
             "download_dir": str(self.playlist_directory(row["id"])),
             "downloaded": sum(v["local_available"] for v in current),
             "local_count": sum(v["local_available"] for v in videos),
@@ -162,6 +250,9 @@ class Store:
     @staticmethod
     def _video_view(row, directory: Path) -> dict:
         item = dict(row)
+        item["youtube_url"] = (
+            f"https://www.youtube.com/watch?v={quote(item['id'], safe='')}"
+        )
         item["local_available"] = (
             contained_file(directory, item["file_path"]) is not None
         )
@@ -182,6 +273,9 @@ class Store:
 
     def update_video(self, playlist_id: str, video_id: str, **fields):
         allowed = {
+            "title",
+            "channel",
+            "thumbnail",
             "status",
             "error",
             "file_path",

@@ -21,6 +21,7 @@ from .account import Account
 from .auth import GoogleLogin, LoginError, MAX_CONFIG_BYTES
 from .config import PLAYLIST_ID, VIDEO_ID, Settings, contained_file
 from .cookies import CookieError, CookieSettings, MAX_COOKIE_BYTES
+from .custom_playlists import parse_video_urls
 from .downloads import DownloadManager
 from .finder import Finder
 from .store import Store
@@ -38,6 +39,11 @@ class CookieUpdate(BaseModel):
     browser: str = Field(default="", max_length=30)
     profile: str = Field(default="", max_length=4096)
     container: str = Field(default="", max_length=200)
+
+
+class CustomPlaylistCreate(BaseModel):
+    title: str = Field(max_length=200)
+    urls: str = Field(max_length=200_000)
 
 
 def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
@@ -260,6 +266,17 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
     def playlists():
         return {"playlists": store.playlists()}
 
+    @app.post("/api/playlists/custom", status_code=201)
+    def create_custom_playlist(request: CustomPlaylistCreate):
+        try:
+            ids = parse_video_urls(request.urls)
+            with operations:
+                playlist_id = store.create_custom_playlist(request.title, ids)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        logger.info("Created custom playlist %s with %d videos", playlist_id, len(ids))
+        return playlist_detail(playlist_id)
+
     @app.post("/api/sync")
     def sync():
         with operations:
@@ -276,6 +293,11 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
     def refresh(playlist_id: str):
         with operations:
             playlist = require_playlist(playlist_id)
+            if playlist["source"] == "custom":
+                raise HTTPException(
+                    400,
+                    "Custom playlists are saved locally and cannot be refreshed from YouTube.",
+                )
             if playlist["state"] in {"running", "queued"}:
                 raise HTTPException(
                     409, "Pause this playlist before refreshing its videos."
@@ -292,7 +314,7 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
                 raise HTTPException(
                     503, "Install ffmpeg before starting downloads. See Setup."
                 )
-            if not playlist["items_synced_at"]:
+            if not playlist["items_synced_at"] and playlist["source"] != "custom":
                 store.sync_videos(
                     playlist_id, account_call(account.videos, playlist_id)
                 )

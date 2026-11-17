@@ -135,3 +135,23 @@ Help me with this step.
 Attached screenshot highlights the previous instructions to upload a
 Netscape-format cookies.txt export when direct browser access remains blocked,
 then save the cookie source and resume/retry the playlist.
+
+## 2026-11-17 — Original video links and custom playlists
+
+Few things -
+
+- The videos in the playlist should also have a link to the original YouTube video link.
+- Also allow creation of custom playlists by accepting a list of video URLs.
+
+## 2026-11-17 — Readable default playlist folders
+
+Also, by default use the playlist name for the folder name and a small random ID.
+playlist name - random id(not too big)
+
+## 2026-11-17 — Original playlist links
+
+Also want to confirm that the YouTube playlists also link their original URL.
+
+## 2026-11-17 — Commit the completed changes
+
+I had told you commit for me.

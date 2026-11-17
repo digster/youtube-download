@@ -228,6 +228,29 @@ class DownloadManager:
                         self.store.update_playlist(playlist_id, state="queued")
 
     def _save_file(self, playlist_id, video_id, path):
+        metadata = {}
+        if self.store.playlist(playlist_id)["source"] == "custom":
+            # Custom lists are created offline from IDs. Enrich them using the
+            # sidecar yt-dlp already writes; no OAuth or extra metadata requests.
+            # A damaged sidecar must never turn a completed download into a failure.
+            try:
+                info_path = contained_file(
+                    self.store.playlist_directory(playlist_id),
+                    f"{video_id}/{video_id}.info.json",
+                )
+                if info_path and info_path.stat().st_size <= 4 * 1024 * 1024:
+                    info = json.loads(info_path.read_text(encoding="utf-8"))
+                    if isinstance(info, dict) and info.get("id") == video_id:
+                        for field, value in (
+                            ("title", info.get("title")),
+                            ("channel", info.get("channel") or info.get("uploader")),
+                        ):
+                            if isinstance(value, str) and value.strip():
+                                metadata[field] = value.strip()[:1000]
+            except (OSError, ValueError):
+                logger.warning(
+                    "Could not read completed-video metadata for %s", video_id
+                )
         self.store.update_video(
             playlist_id,
             video_id,
@@ -236,6 +259,7 @@ class DownloadManager:
             file_path=str(path.relative_to(self.store.playlist_directory(playlist_id))),
             size=path.stat().st_size,
             downloaded_at=now(),
+            **metadata,
         )
 
     def _download_playlist(self, playlist_id):

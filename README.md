@@ -11,6 +11,10 @@ required. Supported platforms: macOS and Linux.
 - Choose Firefox, Safari, Chrome, or another supported browser for download
   cookies, or upload cookies.txt directly from **Account & setup**.
 - List your account's owned playlists, including private playlists and Liked videos.
+- Create custom local playlists by pasting YouTube video URLs, without Google login.
+- Open the original YouTube playlist from its card or library page, and the
+  original video from every video row, including downloaded or unavailable videos.
+- Give new playlists readable folders such as `Weekend watchlist - a1b2c3`.
 - Select several playlists to download in a persistent, sequential queue.
 - Pause and resume; unfinished jobs resume after restarting the server. Closing
   the browser does not interrupt an active download.
@@ -211,6 +215,38 @@ runtime data are excluded from Git.
 5. For missing videos, open **Archive links / Find archives**. Links are also
    fetched automatically when a queued video is identified as unavailable.
 
+Synced playlists have a **YouTube playlist ↗** link on both their card and
+library page. Every video has a **YouTube ↗** link alongside its local playback
+or archive actions. These links open YouTube in a new tab; unavailable videos
+may still be unavailable there.
+
+### Create a custom playlist from video URLs
+
+Click **Create playlist**, enter a name, and paste one YouTube video URL per
+line (up to 500). Standard watch links, youtu.be links, Shorts, live, and embed
+links are supported. Duplicate videos are saved once, in first-seen order;
+timestamps and tracking parameters are discarded. Invalid URLs are reported
+by line number, and nothing is created until every line is valid.
+
+Creation opens the new local library; click **Download** when ready. Custom
+playlists use the same queue, pause/resume, folder changes, and archive lookup
+as synced playlists. They require no Google account connection and are not
+published to YouTube. Private videos still need suitable download cookies.
+Video titles initially show their IDs and are updated from yt-dlp metadata
+after a successful download. Custom playlists have video links but no original
+YouTube playlist link or Google refresh action.
+
+### Default download folders
+
+New synced and custom playlists use `<playlist name> - <6-character random ID>`
+inside the configured download directory, for example
+`Weekend watchlist - a1b2c3`. Unsafe filename characters are removed and long
+names shortened. The folder is saved when the playlist is created; later title
+changes keep that location so completed and partial files remain usable.
+
+Existing playlist folders and manually selected locations stay unchanged.
+Older playlists can therefore still use their original playlist-ID folder.
+
 ### Move a playlist to another folder or drive
 
 Pause the playlist and wait for its download to stop. Move its entire folder,
@@ -295,6 +331,9 @@ pause/resume of an actual subprocess, restart recovery, a completed receipt
 without a database update, moved folders, deleted local files, removed playlist
 entries, unavailable videos, metadata preservation, expired OAuth, finder
 failures, byte-range playback, and path/symlink containment.
+Custom playlist tests cover URL validation and deduplication, atomic creation,
+operation without Google, original source links, custom pause/resume, downloaded
+metadata, folder collisions, long Unicode names, and legacy directory migration.
 Authentication tests cover PKCE, read-only scopes, success/denial, cancelled and
 expired callbacks, duplicate clicks, bad callback state, failed exchanges,
 invalid client files, and atomic token replacement. Browser QA uses a mock

@@ -63,9 +63,16 @@ def test_transient_failures_are_not_misclassified_as_unavailable():
     assert error_status("Private video. Sign in if granted access") == "unavailable"
 
 
-def test_worker_pause_resume_and_idempotent_completion(store, settings, monkeypatch):
-    store.sync_videos(PID, [video()])
-    folder = store.playlist_directory(PID) / VID
+@pytest.mark.parametrize("custom", [False, True])
+def test_worker_pause_resume_and_idempotent_completion(
+    store, settings, monkeypatch, custom
+):
+    if custom:
+        playlist_id = store.create_custom_playlist("Resumable custom list", [VID])
+    else:
+        playlist_id = PID
+        store.sync_videos(PID, [video()])
+    folder = store.playlist_directory(playlist_id) / VID
     folder.mkdir(parents=True)
     # A real subprocess writes a .part before waiting. The second invocation sees
     # that partial data, completes it, and writes the same receipt yt-dlp uses.
@@ -89,18 +96,18 @@ partial.unlink()
     manager = DownloadManager(store, settings, Mock())
     manager.start()
     try:
-        manager.enqueue(PID)
+        manager.enqueue(playlist_id)
         wait_for(lambda: (folder / "video.part").exists())
-        manager.pause(PID)
+        manager.pause(playlist_id)
         wait_for(lambda: manager.active_playlist is None)
-        assert store.playlist(PID)["state"] == "paused"
+        assert store.playlist(playlist_id)["state"] == "paused"
         assert (folder / "video.part").exists()
-        manager.enqueue(PID)
-        wait_for(lambda: store.playlist(PID)["state"] == "completed")
-        assert store.video(PID, VID)["local_available"]
+        manager.enqueue(playlist_id)
+        wait_for(lambda: store.playlist(playlist_id)["state"] == "completed")
+        assert store.video(playlist_id, VID)["local_available"]
         assert (folder / "video.mp4").read_bytes() == b"first half second half"
-        manager.enqueue(PID)
-        wait_for(lambda: store.playlist(PID)["state"] == "completed")
+        manager.enqueue(playlist_id)
+        wait_for(lambda: store.playlist(playlist_id)["state"] == "completed")
         assert len(calls) == 2
     finally:
         manager.close()
