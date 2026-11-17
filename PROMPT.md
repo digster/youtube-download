@@ -112,3 +112,11 @@ Tried Firefox and got this error.
 
 Attached screenshot shows `could not find firefox cookies database` in the
 default macOS Firefox Profiles directory.
+
+## 2026-11-16 — Prefer avoiding Full Disk Access
+
+Ideally I don't want to give the full disk access. I'll try the about:support method.
+
+## 2026-11-16 — Continue the pending documentation commit
+
+continue
