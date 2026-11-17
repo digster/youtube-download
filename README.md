@@ -144,6 +144,12 @@ Enter that full folder path in Shelf's **Profile & advanced options**, save,
 and retry. The path should be a profile folder containing `cookies.sqlite`,
 not the database file itself. See [Mozilla's profile guide](https://support.mozilla.org/en-US/kb/profiles-where-firefox-stores-user-data).
 
+Entering a profile path does not grant macOS permission to read it. Shelf's web
+form cannot authorize the Python server to access a protected profile folder.
+To avoid Full Disk Access when that folder remains blocked, use **Upload
+cookies.txt** with a Netscape-format export. This passes only the selected file
+contents to Shelf; do not select `cookies.sqlite` in the cookies.txt picker.
+
 Choose **No cookies** to disable cookies, including any startup default. **Use
 startup defaults** removes the UI override and restores the following optional
 `.env` settings (only one may be set):

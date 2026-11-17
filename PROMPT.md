@@ -120,3 +120,10 @@ Ideally I don't want to give the full disk access. I'll try the about:support me
 ## 2026-11-16 — Continue the pending documentation commit
 
 continue
+
+## 2026-11-16 — Explicit Firefox profile and limited folder access
+
+this is the path - /Users/ishan/Library/Application Support/Firefox/Profiles/ldbl1cym.default-release
+What should I do now?
+
+Can I give access to that specific profile path?
