@@ -9,7 +9,7 @@ from threading import Lock
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -17,6 +17,7 @@ from google.auth.exceptions import RefreshError
 from youtube_backup.auth import ScopeUpgradeRequired
 
 from .account import Account
+from .auth import GoogleLogin, LoginError, MAX_CONFIG_BYTES
 from .config import PLAYLIST_ID, VIDEO_ID, Settings, contained_file
 from .downloads import DownloadManager
 from .finder import Finder
@@ -36,6 +37,7 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
     settings.download_dir.mkdir(parents=True, exist_ok=True)
     store = Store(settings.data_dir / "library.sqlite3", settings.download_dir)
     account = account or Account(settings.data_dir)
+    login = GoogleLogin(settings, account.save_credentials)
     finder = Finder(store, settings.finder_url)
     manager = DownloadManager(store, settings, finder)
     operations = Lock()
@@ -56,6 +58,7 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
             try:
                 yield
             finally:
+                login.cancel()
                 manager.close()
                 fcntl.flock(lock_file, fcntl.LOCK_UN)
 
@@ -63,12 +66,18 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
         title="YouTube Download", lifespan=lifespan, docs_url=None, redoc_url=None
     )
     app.state.store, app.state.manager, app.state.finder = store, manager, finder
+    app.state.login = login
     app.add_middleware(
         TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "[::1]"]
     )
 
     @app.middleware("http")
     async def local_browser_only(request: Request, call_next):
+        if request.url.path == "/auth/callback":
+            # Uvicorn logs the scope's query string after sending the response.
+            # Keep authorization codes/state out of access logs and other middleware.
+            request.state.oauth_callback = dict(request.query_params)
+            request.scope["query_string"] = b""
         # Cross-origin pages cannot add this header without a CORS preflight. Host
         # validation additionally prevents DNS rebinding against the local server.
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
@@ -88,7 +97,7 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
             "img-src 'self' https:; media-src 'self'; connect-src 'self'; "
             "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
         )
-        if request.url.path.startswith("/api/"):
+        if request.url.path.startswith(("/api/", "/auth/")):
             response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -115,13 +124,13 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
         except FileNotFoundError as exc:
             raise HTTPException(
                 401,
-                "Connect your YouTube account first. Open Setup for the login command.",
+                "Connect your YouTube account first. Open Account & setup and choose Connect with Google.",
             ) from exc
         except (RefreshError, ScopeUpgradeRequired) as exc:
             logger.warning("Account login needs renewal (%s)", type(exc).__name__)
             raise HTTPException(
                 401,
-                "Reconnect your YouTube account: the saved login can no longer be refreshed. Open Account & setup for the login command, then sync again.",
+                "Reconnect your YouTube account: the saved login can no longer be refreshed. Open Account & setup and choose Reconnect with Google.",
             ) from exc
         except Exception as exc:
             # Exceptions from OAuth transports may include credentials or request
@@ -136,12 +145,61 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
     def status():
         return {
             "account": account.status(),
+            "login": login.status(),
             "download_dir": str(settings.download_dir),
             "ffmpeg": bool(shutil.which("ffmpeg")),
             "javascript": bool(shutil.which("node") or shutil.which("deno")),
             "cookies": bool(settings.cookies_file or settings.cookies_browser),
             "free_bytes": shutil.disk_usage(settings.download_dir).free,
         }
+
+    @app.get("/api/auth/status")
+    def login_status():
+        return login.status()
+
+    @app.post("/api/auth/start")
+    def start_login(request: Request):
+        try:
+            # Use a literal loopback IP even when the app was opened as localhost.
+            # Desktop OAuth clients support the local server's chosen port.
+            return login.start(
+                f"http://127.0.0.1:{request.url.port or 80}/auth/callback"
+            )
+        except LoginError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/auth/cancel")
+    def cancel_login():
+        return login.cancel()
+
+    @app.post("/api/auth/config")
+    async def configure_login(request: Request):
+        content = bytearray()
+        async for chunk in request.stream():
+            content.extend(chunk)
+            if len(content) > MAX_CONFIG_BYTES:
+                raise HTTPException(
+                    413, "Choose an OAuth client JSON smaller than 64 KB."
+                )
+        try:
+            return login.configure(bytes(content))
+        except LoginError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except OSError as exc:
+            raise HTTPException(
+                500,
+                "Could not save the Google client file. Check the data folder's permissions.",
+            ) from exc
+
+    @app.get("/auth/callback")
+    def google_callback(request: Request):
+        query = request.state.oauth_callback
+        result = login.complete(
+            query.get("state", ""), query.get("code", ""), query.get("error", "")
+        )
+        # Drop the authorization code from the address bar before loading any app
+        # assets. The originating tab also observes completion through status polling.
+        return RedirectResponse(f"/?auth={result}", status_code=303)
 
     @app.get("/api/playlists")
     def playlists():

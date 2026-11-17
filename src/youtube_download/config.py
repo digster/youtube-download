@@ -18,6 +18,7 @@ class Settings:
     cookies_browser: str = ""
     format: str = "bv*+ba/b"
     finder_url: str = "https://findyoutubevideo.thetechrobo.ca"
+    client_secrets_file: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -31,6 +32,7 @@ class Settings:
             cookies_browser=os.getenv("YTDL_COOKIES_BROWSER", ""),
             format=os.getenv("YTDL_FORMAT") or "bv*+ba/b",
             finder_url=os.getenv("YTDL_FINDER_URL", cls.finder_url).rstrip("/"),
+            client_secrets_file=os.getenv("YTDL_CLIENT_SECRETS", ""),
         )
         if settings.cookies_file and settings.cookies_browser:
             raise ValueError(

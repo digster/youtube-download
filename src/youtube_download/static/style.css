@@ -1160,3 +1160,60 @@ video {
 .folder-location button {
   flex-shrink: 0;
 }
+
+/* Keep sign-in feedback above setup details, with controls that wrap on phones. */
+.auth-card {
+  padding: 20px;
+  margin-bottom: 20px;
+  border: 1px solid #ceddc8;
+  background: #f6f9f2;
+  border-radius: 10px;
+}
+.auth-card h3 {
+  margin: 0 0 8px;
+  font-size: 17px;
+}
+.auth-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin: 14px 0;
+}
+.auth-message {
+  color: var(--ink);
+}
+.auth-success {
+  color: var(--green);
+  font-weight: 600;
+}
+.auth-error {
+  color: var(--danger);
+}
+.auth-card details {
+  padding-top: 15px;
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+}
+.auth-card summary {
+  font-size: 12px;
+  cursor: pointer;
+}
+.auth-file-label {
+  display: block;
+  font-size: 12px;
+  margin: 14px 0 8px;
+}
+#auth-client-file {
+  display: block;
+  max-width: 100%;
+  font-size: 11px;
+}
+#auth-client-file::file-selector-button {
+  border: 1px solid var(--line);
+  padding: 9px;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  margin-right: 8px;
+  cursor: pointer;
+}

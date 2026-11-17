@@ -1,9 +1,11 @@
 """Reuse youtube-backup's OAuth, pagination, retries, and account API."""
 
 from threading import Lock
+import os
+import tempfile
 
 from youtube_backup.api import YouTubeAPI
-from youtube_backup.auth import get_auth_status, get_credentials
+from youtube_backup.auth import get_auth_status, get_credentials, _token_path
 from youtube_backup.quota import QuotaTracker
 
 from .config import PLAYLIST_ID, VIDEO_ID
@@ -33,6 +35,27 @@ class Account:
             "expired": status.get("expired", False),
             "provider": "youtube-backup",
         }
+
+    def save_credentials(self, credentials):
+        """Replace the shared token atomically, serialized against this app's refreshes."""
+        with self.lock:
+            destination = _token_path()
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temporary = None
+            try:
+                # NamedTemporaryFile uses owner-only permissions. A failed write or
+                # failed consent must leave the previous youtube-backup token intact.
+                with tempfile.NamedTemporaryFile(
+                    mode="w", dir=destination.parent, delete=False
+                ) as file:
+                    temporary = file.name
+                    file.write(credentials.to_json())
+                    file.flush()
+                    os.fsync(file.fileno())
+                os.replace(temporary, destination)
+            finally:
+                if temporary and os.path.exists(temporary):
+                    os.unlink(temporary)
 
     def _api(self):
         # Keep this app's advisory quota ledger separate; the server serializes all

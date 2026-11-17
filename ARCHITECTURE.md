@@ -11,6 +11,8 @@ files are deliberately separate from versioned source.
 Browser: static/index.html + app.js + style.css
   ├─ GET /api/playlists, /api/playlists/:id (poll every 2 seconds)
   ├─ POST sync, refresh, download, pause, folder, find
+  ├─ POST /api/auth/start, /config, /cancel; GET /api/auth/status
+  ├─ Google system-browser consent → GET /auth/callback → Shelf
   └─ GET video/file (FileResponse supports HTTP ranges)
                   │
                app.py
@@ -32,6 +34,12 @@ Browser: static/index.html + app.js + style.css
   The adapter normalizes Google responses into simple dictionaries. Its lock
   serializes account requests and keeps this app's quota ledger coherent. The
   sibling API's service is closed after each operation.
+- `auth.py` manages the UI's Google authorization-code flow with the installed
+  app library, PKCE, read-only scopes, and a five-minute state/verifier lifetime.
+  It opens the system browser and returns a fallback authorization link. Token
+  exchange has a 30-second network timeout; completed tokens are saved through
+  `Account.save_credentials`, which shares the API-refresh lock and atomically
+  replaces the existing youtube-backup token with owner-only permissions.
 - `store.py` owns all SQLite transactions, sync merging, and local file
   verification. Connections are short-lived and never shared between request
   threads and the worker. WAL permits reads during writes. A completed remote
@@ -109,6 +117,32 @@ previous local library; account separation is not implemented.
 
 ## Local security and frontend
 
+### Google reconnect
+
+`POST /api/auth/start` creates one in-memory OAuth attempt and returns its status.
+Repeated clicks reuse that attempt. A configured client file comes from the
+local UI upload first, then `YTDL_CLIENT_SECRETS`, or automatic discovery in the
+working directory/sibling youtube-backup checkout. The upload endpoint enforces
+a 64 KB limit, Google Desktop app structure, and Google's known OAuth endpoints.
+The config and tokens are never returned to the browser.
+
+Google redirects to `http://127.0.0.1:<server port>/auth/callback`. This GET route
+is the intentional exception to mutation-header checks: it verifies the
+one-time OAuth state before exchanging the code with PKCE. A callback with a bad,
+replayed, cancelled, or expired state cannot change credentials. A generation
+counter prevents a callback finishing after cancellation from saving a token.
+The flow is ephemeral; restarting the server requires a new sign-in attempt.
+
+The callback query is removed from the ASGI scope before access logging, and a
+303 redirect clears the authorization code from the browser address. OAuth
+library debug logging is suppressed to avoid logging request bodies/tokens.
+The original page polls the login status and offers **Sync playlists** when
+connected. A denied/failed login keeps the old token; the existing CLI workflow
+is retained. The implementation follows Google's
+[Desktop app OAuth flow](https://developers.google.com/identity/protocols/oauth2/native-app).
+
+### Other local routes
+
 This app is a local tool, not a public multiuser server. It binds to 127.0.0.1,
 validates the Host header, requires a custom header plus matching Origin for
 mutations, and enables no CORS access. A CSP blocks inline scripts, framing,
@@ -121,6 +155,9 @@ cards, accessible controls, local video playback, and a selection toolbar.
 Two-second polling stops when the document is hidden and avoids overlapping
 requests. Polls preserve focused card controls; dialogs/search remain outside
 the rerendered list. Download work continues independently of the tab.
+Login polling updates only its controls; it does not replace the client-file
+picker or other settings while someone is using them. An account API 401 opens
+the setup dialog and directs the user to the reconnect button.
 
 ## Developer workflows
 

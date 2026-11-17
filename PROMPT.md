@@ -76,3 +76,7 @@ Also allow changing the download folder for a list if the local videos are moved
 ## 2026-11-16 — Continuation
 
 continue
+
+## 2026-11-16 — Google reconnect in the UI
+
+Instead of typing the command, can you implement the Google login reconnecting through the ui?

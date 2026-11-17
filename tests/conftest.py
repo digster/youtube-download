@@ -38,6 +38,9 @@ def video(id=VID, **kwargs):
 
 
 class FakeAccount:
+    def save_credentials(self, credentials):
+        self.credentials = credentials
+
     def status(self):
         return {"authenticated": True, "provider": "youtube-backup", "expired": False}
 

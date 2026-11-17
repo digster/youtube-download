@@ -32,6 +32,9 @@ const state = {
   busy: new Set(),
   signature: "",
   polling: false,
+  login: null,
+  loginPolling: false,
+  loginBusy: false,
 };
 const labels = {
   idle: "Not started",
@@ -74,12 +77,15 @@ async function api(path, method = "GET", body) {
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   const data = await response.json();
-  if (!response.ok)
-    throw new Error(
+  if (!response.ok) {
+    const error = new Error(
       typeof data.detail === "string"
         ? data.detail
         : "The request could not be completed.",
     );
+    error.status = response.status;
+    throw error;
+  }
   return data;
 }
 
@@ -305,8 +311,108 @@ function setup() {
   const check = (name, ok, yes, no) =>
     `<div class="setup-check"><span>${name}</span><strong class="${ok ? "" : "warning"}">${ok ? yes : no}</strong></div>`;
   $("#setup-content").innerHTML =
-    `${s ? check("YouTube account", s.account.authenticated, s.account.expired ? "Token needs refresh" : "Token found", "Login needed") + check("ffmpeg", s.ffmpeg, "Ready", "Install required") + check("JavaScript runtime", s.javascript, "Ready", "Install Node or Deno") + check("Download cookies", s.cookies, "Configured", "Optional · for restricted videos") : "<p>Server status is unavailable.</p>"}<h3>Connect your account</h3><p>Shelf uses your existing <strong>youtube-backup</strong> login, including private playlists and Liked videos. If it needs reconnecting, run this from the project folder:</p><code>uv run youtube-download auth login --client-secrets /path/to/client_secrets.json</code><p>Then choose <strong>Sync playlists</strong>. Watch Later and saved playlists from other channels are not exposed by the account API.</p><h3>Where your videos live</h3><code>${escapeHTML(s?.download_dir || "Configured in .env")}</code><p>${s ? `${bytes(s.free_bytes)} available. ` : ""}Change a playlist's folder on its library page after moving its contents. Downloads use video ID subfolders so titles can change safely.</p><h3>Private or restricted videos</h3><p>OAuth supplies the playlist list. Set <strong>YTDL_COOKIES_BROWSER=chrome</strong> or <strong>YTDL_COOKIES_FILE</strong> in .env for yt-dlp, then restart the app. Use only one cookie source.</p><h3>Dependencies</h3><p>Install ffmpeg and Node or Deno. On macOS with Homebrew:</p><code>brew install ffmpeg node</code><p class="muted">Active playlists resume when the app restarts. Paused playlists stay paused. Updates: uv lock --upgrade-package yt-dlp --upgrade-package yt-dlp-ejs &amp;&amp; uv sync</p>`;
-  $("#setup-dialog").showModal();
+    `<section class="auth-card" aria-label="Google connection"><h3>Your YouTube account</h3><p>Connect with Google to see your playlists. Sign-in opens in your browser and requests read-only YouTube access.</p><div id="auth-controls" aria-live="polite"></div><p id="auth-error" class="auth-error" role="alert" hidden></p><details id="auth-file-options" ${state.login?.configured ? "" : "open"}><summary>Google OAuth client file</summary><p id="auth-config-status"></p><label class="auth-file-label" for="auth-client-file">Choose Desktop app client JSON</label><input id="auth-client-file" type="file" accept=".json,application/json"><p class="muted">Use the OAuth client JSON from your Google Cloud project. The file stays on this computer.</p></details></section>${s ? check("ffmpeg", s.ffmpeg, "Ready", "Install required") + check("JavaScript runtime", s.javascript, "Ready", "Install Node or Deno") + check("Download cookies", s.cookies, "Configured", "Optional · for restricted videos") : "<p>Server status is unavailable.</p>"}<h3>Where your videos live</h3><code>${escapeHTML(s?.download_dir || "Configured in .env")}</code><p>${s ? `${bytes(s.free_bytes)} available. ` : ""}Change a playlist's folder on its library page after moving its contents. Downloads use video ID subfolders so titles can change safely.</p><h3>Private or restricted videos</h3><p>Google supplies the playlist list. Set <strong>YTDL_COOKIES_BROWSER=chrome</strong> or <strong>YTDL_COOKIES_FILE</strong> in .env for yt-dlp, then restart the app. Use only one cookie source.</p><h3>Dependencies</h3><p>Install ffmpeg and Node or Deno. On macOS with Homebrew:</p><code>brew install ffmpeg node</code><p class="muted">Active playlists resume when the app restarts. Paused playlists stay paused. Watch Later and saved playlists from other channels are not exposed by the account API.</p>`;
+  renderLogin();
+  if (!$("#setup-dialog").open) $("#setup-dialog").showModal();
+  refreshLogin();
+}
+
+function renderLogin() {
+  const container = $("#auth-controls");
+  if (!container) return;
+  const login = state.login;
+  const pending = ["waiting", "exchanging"].includes(login?.phase);
+  const connected = login?.phase === "connected";
+  const configured = login?.configured;
+  const label = state.status?.account.authenticated
+    ? "Reconnect with Google"
+    : "Connect with Google";
+  const focusedAction = document.activeElement?.dataset.action;
+  container.innerHTML = `<p class="auth-message ${connected ? "auth-success" : ""}">${escapeHTML(login?.message || "Checking your Google connection…")}</p><div class="auth-actions">${pending ? `<button class="button primary" disabled>${login.phase === "exchanging" ? "Finishing connection…" : "Waiting for Google…"}</button><button class="button secondary" data-action="auth-cancel" ${state.loginBusy ? "disabled" : ""}>Cancel sign-in</button>` : `${connected ? '<button class="button primary" data-action="sync">↻ Sync playlists</button>' : ""}<button class="button ${connected ? "secondary" : "primary"}" data-action="auth-start" ${!configured || state.loginBusy ? "disabled" : ""}>${state.loginBusy ? "Opening Google…" : label}</button>`}</div>${pending && safeURL(login.authorization_url) ? `<p class="muted">Browser didn't open? <a class="external-link" href="${safeURL(login.authorization_url)}" target="_blank" rel="noopener noreferrer">Open Google sign-in ↗</a></p>` : ""}`;
+  $("#auth-config-status").textContent = configured
+    ? "A Google client file is available. You can use it or choose another."
+    : "Choose your Google Desktop app client JSON to enable sign-in.";
+  $("#auth-client-file").disabled = pending || state.loginBusy;
+  if (focusedAction)
+    container
+      .querySelector(`[data-action="${CSS.escape(focusedAction)}"]`)
+      ?.focus({ preventScroll: true });
+}
+
+function loginError(message) {
+  if (!$("#auth-error")) return;
+  $("#auth-error").textContent = message;
+  $("#auth-error").hidden = false;
+}
+
+async function refreshLogin() {
+  if (state.loginPolling || state.loginBusy) return;
+  state.loginPolling = true;
+  try {
+    const previous = state.login?.phase;
+    const login = await api("/api/auth/status");
+    const changed =
+      !state.login ||
+      ["phase", "message", "configured", "authorization_url"].some(
+        (key) => state.login[key] !== login[key],
+      );
+    state.login = login;
+    if (previous !== "connected" && login.phase === "connected") {
+      state.status = await api("/api/status");
+      notice("Google connected. Sync your playlists to continue.");
+    }
+    if (changed) renderLogin();
+  } catch (error) {
+    loginError(
+      "Could not check sign-in progress. Check that Shelf is still running.",
+    );
+  } finally {
+    state.loginPolling = false;
+  }
+}
+
+async function loginAction(action) {
+  if (state.loginBusy) return;
+  state.loginBusy = true;
+  $("#auth-error").hidden = true;
+  renderLogin();
+  try {
+    state.login = await api(
+      `/api/auth/${action === "auth-start" ? "start" : "cancel"}`,
+      "POST",
+    );
+  } catch (error) {
+    loginError(error.message);
+  } finally {
+    state.loginBusy = false;
+    renderLogin();
+  }
+}
+
+async function chooseGoogleClient(input) {
+  const file = input.files[0];
+  if (!file) return;
+  state.loginBusy = true;
+  $("#auth-error").hidden = true;
+  renderLogin();
+  try {
+    if (file.size > 64 * 1024)
+      throw new Error("Choose an OAuth client JSON smaller than 64 KB.");
+    let config;
+    try {
+      config = JSON.parse(await file.text());
+    } catch {
+      throw new Error("The selected file is not valid JSON.");
+    }
+    state.login = await api("/api/auth/config", "POST", config);
+    $("#auth-file-options").open = false;
+  } catch (error) {
+    loginError(error.message);
+  } finally {
+    state.loginBusy = false;
+    input.value = "";
+    renderLogin();
+  }
 }
 
 async function findArchives(videoId) {
@@ -337,6 +443,10 @@ document.addEventListener("click", async (event) => {
   const id = button.dataset.id || playlistId;
   if (action === "setup") {
     setup();
+    return;
+  }
+  if (action === "auth-start" || action === "auth-cancel") {
+    await loginAction(action);
     return;
   }
   if (action === "filter") {
@@ -372,6 +482,7 @@ document.addEventListener("click", async (event) => {
   if (id) state.busy.add(id);
   try {
     if (action === "sync") {
+      if ($("#setup-dialog").open) $("#setup-dialog").close();
       await api("/api/sync", "POST");
       notice(
         "Playlists synced. Open a library to see its videos, or select playlists to download.",
@@ -411,6 +522,7 @@ document.addEventListener("click", async (event) => {
     }
   } catch (error) {
     notice(error.message, true);
+    if (error.status === 401) setup();
   } finally {
     if (id) state.busy.delete(id);
     button.disabled = false;
@@ -420,6 +532,10 @@ document.addEventListener("click", async (event) => {
 
 document.addEventListener("change", (event) => {
   const input = event.target;
+  if (input.id === "auth-client-file") {
+    chooseGoogleClient(input);
+    return;
+  }
   if (input.matches("[data-select]")) {
     if (input.checked) state.selected.add(input.dataset.select);
     else state.selected.delete(input.dataset.select);
@@ -493,11 +609,27 @@ async function initialize() {
     api("/api/status")
       .then((s) => {
         state.status = s;
+        state.login = s.login;
       })
       .catch(() => {}),
   ]);
+  const authResult = new URLSearchParams(location.search).get("auth");
+  if (authResult) {
+    history.replaceState(null, "", location.pathname);
+    setup();
+    if (authResult === "invalid")
+      loginError(
+        "This sign-in link is invalid or expired. Start a new connection here.",
+      );
+  }
   setInterval(() => {
     if (!document.hidden) reload();
+    if (
+      !document.hidden &&
+      ($("#setup-dialog").open ||
+        ["waiting", "exchanging"].includes(state.login?.phase))
+    )
+      refreshLogin();
   }, 2000);
 }
 initialize();

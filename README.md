@@ -7,6 +7,7 @@ required. Supported platforms: macOS and Linux.
 
 ## Features
 
+- Connect or reconnect Google directly from **Account & setup**, without a terminal command.
 - List your account's owned playlists, including private playlists and Liked videos.
 - Select several playlists to download in a persistent, sequential queue.
 - Pause and resume; unfinished jobs resume after restarting the server. Closing
@@ -54,17 +55,37 @@ directory, without Uvicorn's multiple-worker mode. Stop with Ctrl+C.
 Shelf reuses `youtube-backup`'s existing OAuth token. An API key is insufficient
 for private account data. If no token exists, or Google rejects an expired login:
 
+1. Open **Account & setup** in the sidebar.
+2. Click **Connect with Google** or **Reconnect with Google**.
+3. Complete Google's consent screen in the browser that opens. Google returns
+   you to Shelf, and the original tab also updates its connection status.
+4. Click **Sync playlists** in the connected account panel.
+
+Shelf automatically finds `./client_secrets.json` or the existing
+`../youtube-backup/client_secrets.json`. You can also set `YTDL_CLIENT_SECRETS`.
+If no file is available, use **Google OAuth client file → Choose Desktop app
+client JSON** in the same dialog. The selected configuration is saved locally
+with owner-only permissions under `data/oauth-client.json`; it takes precedence
+over environment/discovered files. Files must be valid Google Desktop app
+client JSON and smaller than 64 KB.
+
+Use your Google Cloud **Desktop app** OAuth client JSON with the YouTube Data API
+v3 enabled. The login requests read-only YouTube access and stores its token using
+`youtube-backup`'s platformdirs location (on macOS:
+`~/Library/Application Support/youtube-backup/token.json`). The token is never
+returned to the HTML client or copied into this repository. Its replacement is
+atomic, so denial, cancellation, or a failed exchange keeps the previous login.
+
+The button opens your default system browser. If it does not open, use the
+**Open Google sign-in** link. Waiting attempts expire after five minutes;
+**Cancel sign-in** lets you start again immediately. Restarting the server
+invalidates an unfinished login. You can close/reopen the setup dialog without
+cancelling an attempt. The CLI login remains available for terminal workflows:
+
 ```sh
 uv run youtube-download auth login --client-secrets ../youtube-backup/client_secrets.json
 uv run youtube-download auth status
 ```
-
-Use your Google Cloud **Desktop app** OAuth client JSON with the YouTube Data API
-v3 enabled. Complete the browser consent flow, then click **Sync playlists**.
-The login requests read-only YouTube access and stores its token using
-`youtube-backup`'s platformdirs location (on macOS:
-`~/Library/Application Support/youtube-backup/token.json`). The token is never
-returned to the HTML client or copied into this repository.
 
 Why `youtube-backup` rather than `youtube-client`: the former already supports
 account OAuth, `mine=True` playlist pagination, retries, and Liked videos.
@@ -158,6 +179,7 @@ Copy `.env.example` to `.env`; all settings are optional.
 | `YTDL_DOWNLOAD_DIR` | `<data dir>/downloads` | Default parent folder for playlists |
 | `YTDL_PORT` | `8765` | Loopback HTTP port; CLI `--port` takes precedence |
 | `YTDL_LOG_LEVEL` | `INFO` | Python console and rotating file log level |
+| `YTDL_CLIENT_SECRETS` | empty | Optional Google Desktop OAuth client JSON; otherwise auto-detected |
 | `YTDL_COOKIES_FILE` | empty | Netscape-format cookies for yt-dlp |
 | `YTDL_COOKIES_BROWSER` | empty | Browser/profile for yt-dlp cookie extraction |
 | `YTDL_FORMAT` | `bv*+ba/b` | yt-dlp format selector; best video and audio by default |
@@ -190,6 +212,10 @@ pause/resume of an actual subprocess, restart recovery, a completed receipt
 without a database update, moved folders, deleted local files, removed playlist
 entries, unavailable videos, metadata preservation, expired OAuth, finder
 failures, byte-range playback, and path/symlink containment.
+Authentication tests cover PKCE, read-only scopes, success/denial, cancelled and
+expired callbacks, duplicate clicks, bad callback state, failed exchanges,
+invalid client files, and atomic token replacement. Browser QA uses a mock
+Google consent page and never alters your real credentials.
 
 Additional integration cases to test with your setup:
 
@@ -200,6 +226,8 @@ Additional integration cases to test with your setup:
 - Try a large real playlist containing repeated IDs and deleted/private entries.
 - Move a paused playlist across volumes while retaining `.part`, `.ytdl`, and
   hidden receipt files, then resume from its new folder.
+- Complete a real Google reconnect, decline consent, and retry from the UI;
+  also verify the fallback link if your default browser cannot be opened.
 
 Logs are in `data/app.log` (2 MB rotation, three backups) and the terminal.
 Account errors are deliberately summarized without logging OAuth response

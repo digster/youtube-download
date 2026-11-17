@@ -17,3 +17,12 @@
   test with a mocked success when localhost is blocked.
 - The public youtubevideofinder v5 API returns `keys[].available[]` link objects
   with `contains.video`/`contains.metadata`, rather than a single URL per service.
+- Google Desktop OAuth can return to the app's existing loopback port. Keep
+  state and PKCE in memory, validate state before a code-only token exchange,
+  and do not disable OAuthlib's HTTPS protection globally.
+- Callback URLs carry authorization codes. Remove the query from the ASGI
+  scope before access logging and redirect to a clean app URL immediately.
+- `secrets.compare_digest` rejects non-ASCII strings; compare encoded bytes so
+  a malformed callback returns a normal rejection instead of HTTP 500.
+- Validate endpoint types before set membership: malformed JSON can contain
+  arrays/objects instead of strings, which are unhashable.

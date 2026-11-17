@@ -12,6 +12,7 @@ downloads/
 *.sqlite3*
 *.log
 client_secrets*.json
+oauth-client.json
 token.json
 cookies*.txt
 output/
