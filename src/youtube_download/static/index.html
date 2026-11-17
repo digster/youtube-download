@@ -8,6 +8,7 @@
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/static/style.css" />
     <script src="/static/app.js" defer></script>
+    <script src="/static/download-settings.js" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
@@ -34,6 +35,10 @@
           <span class="dot"></span> Runs on your computer
         </div>
         <p>Your library stays on disk.<br />Your progress stays with it.</p>
+        <button class="setup-button" data-action="download-settings">
+          <span aria-hidden="true">↓</span> Download settings
+          <span aria-hidden="true">↗</span>
+        </button>
         <button class="setup-button" data-action="setup">
           <span aria-hidden="true">⚙</span> Account & setup
           <span aria-hidden="true">↗</span>
@@ -146,15 +151,14 @@
             name="urls"
             required
             rows="7"
-            maxlength="200000"
             spellcheck="false"
             placeholder="https://www.youtube.com/watch?v=…&#10;https://youtu.be/…"
             aria-describedby="create-help"
           ></textarea>
           <p id="create-help" class="muted">
-            One URL per line, up to 500 videos. Watch, Shorts, live, and share
-            links work. Duplicates are removed, keeping your order. Video titles
-            appear after downloading.
+            One URL per line. Watch, Shorts, live, and share links work.
+            Duplicates are removed, keeping your order. Video titles appear
+            after downloading.
           </p>
           <div class="heading-actions">
             <button class="button primary" id="create-submit" type="submit">
@@ -167,6 +171,237 @@
         </fieldset>
         <p id="create-error" class="auth-error" role="alert" hidden></p>
       </form>
+    </dialog>
+    <dialog
+      id="download-settings-dialog"
+      aria-labelledby="download-settings-title"
+    >
+      <div class="dialog-heading">
+        <h2 id="download-settings-title">Download settings</h2>
+        <button
+          class="icon-button"
+          data-close
+          aria-label="Close download settings"
+        >
+          ×
+        </button>
+      </div>
+      <p>
+        Choose how yt-dlp saves your videos. These settings apply to all
+        playlists when the next video starts.
+      </p>
+      <p id="download-settings-status" class="cookie-current" role="status"></p>
+      <form id="download-settings-form">
+        <fieldset id="download-settings-fields" disabled>
+          <section
+            class="download-settings-section"
+            aria-labelledby="quality-heading"
+          >
+            <h3 id="quality-heading">Video &amp; files</h3>
+            <div class="download-settings-grid">
+              <label for="download-quality"
+                >Video quality
+                <select id="download-quality">
+                  <option value="best">Best available</option>
+                  <option value="2160">Up to 4K (2160p)</option>
+                  <option value="1440">Up to 1440p</option>
+                  <option value="1080">Up to 1080p</option>
+                  <option value="720">Up to 720p</option>
+                  <option value="480">Up to 480p</option>
+                  <option value="custom">Custom format selector</option>
+                </select>
+              </label>
+              <label for="download-container"
+                >Container when merging
+                <select id="download-container" name="merge_output_format">
+                  <option value="mp4/mkv">Automatic (MP4 / MKV)</option>
+                  <option value="mp4">MP4</option>
+                  <option value="mkv">MKV</option>
+                  <option value="webm">WebM</option>
+                </select>
+              </label>
+            </div>
+            <div id="download-custom-format" hidden>
+              <label for="download-format">yt-dlp format selector</label>
+              <input
+                id="download-format"
+                name="format"
+                maxlength="500"
+                placeholder="bv*+ba/b"
+                aria-describedby="download-format-help"
+              />
+              <p id="download-format-help" class="muted">
+                Use + to merge video and audio, or / for fallbacks. One output
+                per video.
+                <a
+                  href="https://github.com/yt-dlp/yt-dlp#format-selection"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  >Format guide ↗</a
+                >
+              </p>
+            </div>
+            <p class="muted">
+              The resolution is a maximum, not an upscale. Container choice
+              applies when streams are merged; it does not convert an existing
+              single-file format.
+            </p>
+            <label class="download-checkbox"
+              ><input type="checkbox" name="embed_metadata" /> Embed title,
+              channel, and metadata</label
+            >
+            <label class="download-checkbox"
+              ><input type="checkbox" name="write_thumbnail" /> Save a thumbnail
+              alongside the video</label
+            >
+          </section>
+          <section
+            class="download-settings-section"
+            aria-labelledby="subtitles-heading"
+          >
+            <h3 id="subtitles-heading">Subtitles</h3>
+            <label class="download-checkbox"
+              ><input type="checkbox" name="write_subs" /> Save creator-provided
+              subtitles</label
+            >
+            <label class="download-checkbox"
+              ><input type="checkbox" name="write_auto_subs" /> Include
+              automatically generated subtitles</label
+            >
+            <div id="download-subtitle-options" hidden>
+              <label for="download-languages">Subtitle languages</label>
+              <input
+                id="download-languages"
+                name="sub_langs"
+                maxlength="200"
+                placeholder="en.*,ja"
+                aria-describedby="download-languages-help"
+              />
+              <p id="download-languages-help" class="muted">
+                Comma-separated codes, such as en.*,ja. Use all,-live_chat for
+                every language except live chat.
+              </p>
+              <label class="download-checkbox"
+                ><input type="checkbox" name="embed_subs" /> Also embed
+                subtitles in the video</label
+              >
+            </div>
+          </section>
+          <details
+            class="download-settings-section"
+            id="download-network-options"
+          >
+            <summary>Speed &amp; retries</summary>
+            <div class="download-settings-grid">
+              <label for="download-rate"
+                >Speed limit
+                <input
+                  id="download-rate"
+                  name="limit_rate"
+                  maxlength="30"
+                  placeholder="Unlimited"
+                  aria-describedby="download-rate-help"
+                />
+              </label>
+              <label for="download-fragments"
+                >Parallel fragments
+                <input
+                  id="download-fragments"
+                  name="concurrent_fragments"
+                  type="number"
+                  min="1"
+                  max="16"
+                  step="1"
+                  required
+                />
+              </label>
+            </div>
+            <p id="download-rate-help" class="muted">
+              Bytes per second: 500K or 5M. Leave blank for unlimited. Parallel
+              fragments apply to supported segmented streams; playlists still
+              download one video at a time.
+            </p>
+            <div class="download-settings-grid">
+              <label for="download-retries"
+                >Download retries
+                <input
+                  id="download-retries"
+                  name="retries"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="1"
+                  required
+                />
+              </label>
+              <label for="download-fragment-retries"
+                >Fragment retries
+                <input
+                  id="download-fragment-retries"
+                  name="fragment_retries"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="1"
+                  required
+                />
+              </label>
+              <label for="download-timeout"
+                >Network timeout (seconds)
+                <input
+                  id="download-timeout"
+                  name="socket_timeout"
+                  type="number"
+                  min="1"
+                  max="300"
+                  step="1"
+                  required
+                />
+              </label>
+              <label for="download-sleep"
+                >Wait before each video (seconds)
+                <input
+                  id="download-sleep"
+                  name="sleep_interval"
+                  type="number"
+                  min="0"
+                  max="3600"
+                  step="1"
+                  required
+                />
+              </label>
+            </div>
+          </details>
+          <p class="muted">
+            Completed files are kept. Keep quality and format unchanged when
+            resuming partial files. A running video keeps its settings until it
+            finishes or you pause and retry.
+          </p>
+          <div class="heading-actions">
+            <button
+              id="download-settings-save"
+              class="button primary"
+              type="submit"
+            >
+              Save download settings
+            </button>
+            <button
+              id="download-settings-reset"
+              class="button secondary"
+              type="button"
+            >
+              Restore startup defaults
+            </button>
+          </div>
+        </fieldset>
+        <p id="download-settings-feedback" role="alert" hidden></p>
+      </form>
+      <p class="muted">
+        For private videos,
+        <button class="button quiet small" data-action="download-cookies">
+          manage download cookies ↗
+        </button>
+      </p>
     </dialog>
     <dialog id="setup-dialog" aria-labelledby="setup-title">
       <div class="dialog-heading">

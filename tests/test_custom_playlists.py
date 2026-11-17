@@ -63,8 +63,28 @@ def test_pasted_list_preserves_order_and_deduplicates():
         parse_video_urls(f"https://youtu.be/{VID}\n\ninvalid")
     with pytest.raises(ValueError, match="at least one"):
         parse_video_urls("\n  ")
-    with pytest.raises(ValueError, match="500"):
-        parse_video_urls((f"https://youtu.be/{VID}\n") * 501)
+
+
+def test_large_custom_playlist_import_has_no_video_count_cap(client):
+    # A 5,001-video Watch Later export exceeds both former limits: 500 entries
+    # and 200,000 characters. Import it atomically without truncation or reordering.
+    ids = [f"{index:011d}" for index in range(5001)]
+    response = client.post(
+        "/api/playlists/custom",
+        json={
+            "title": "Large Watch Later",
+            "urls": "\n".join(
+                f"https://www.youtube.com/watch?v={value}" for value in ids
+            ),
+        },
+    )
+    assert response.status_code == 201
+    assert [video["id"] for video in response.json()["videos"]] == ids
+    assert response.json()["playlist"]["total"] == 5001
+
+
+def test_large_duplicate_input_still_deduplicates():
+    assert parse_video_urls((f"https://youtu.be/{VID}\n") * 501) == [VID]
 
 
 def test_custom_creation_needs_no_account_and_queues_normally(client, monkeypatch):

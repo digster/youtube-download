@@ -155,3 +155,19 @@ Also want to confirm that the YouTube playlists also link their original URL.
 ## 2026-11-17 — Commit the completed changes
 
 I had told you commit for me.
+
+## 2026-11-17 — yt-dlp settings in the UI
+
+Allow setting the settings for yt-dlp through the ui
+
+## 2026-11-17 — Custom playlist limit
+
+Also, why is there a limit for the custom playlists?
+
+Attached screenshot shows a Watch Later import rejected by the 500-video limit.
+
+## 2026-11-17 — Commit reminder and continuation
+
+Also remember to do the commits for me.
+
+continue

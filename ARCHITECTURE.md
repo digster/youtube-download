@@ -14,6 +14,7 @@ Browser: static/index.html + app.js + style.css
   ├─ POST /api/playlists/custom (local URL list → saved membership)
   ├─ POST /api/auth/start, /config, /cancel; GET /api/auth/status
   ├─ GET/POST /api/cookies; POST /api/cookies/file
+  ├─ GET/POST /api/download-settings; POST /api/download-settings/reset
   ├─ Google system-browser consent → GET /auth/callback → Shelf
   └─ GET video/file (FileResponse supports HTTP ranges)
                   │
@@ -56,6 +57,11 @@ Browser: static/index.html + app.js + style.css
   time with explicit options, no shell, no external yt-dlp configuration, and no
   user plugins. Files are named by video ID, so title changes and reordering do
   not change the resume destination. Each playlist has its own physical copies.
+- `download_settings.py` owns immutable, strictly validated `DownloadOptions`
+  and atomic saved preferences. `DownloadManager` snapshots these immediately
+  before building each subprocess command. The same service instance is shared
+  with the settings API; a save affects subsequent launches, including retries,
+  without mutating a running command or the startup `Settings` object.
 - `cookies.py` owns live cookie preferences, upload validation, and per-video
   snapshots. `app.py` and `DownloadManager` share one instance. The manager takes
   a fresh snapshot before each subprocess, so settings changes apply without
@@ -140,6 +146,27 @@ previous local library; account separation is not implemented.
 
 ## Local security and frontend
 
+### yt-dlp preferences
+
+`GET/POST /api/download-settings` reads/replaces global download preferences;
+`POST /api/download-settings/reset` removes the override. These routes use the
+local header/origin protections. Strict types, bounds, known containers, and
+the installed yt-dlp format parser validate values before any write. Selectors
+that produce multiple outputs are rejected to preserve the single-media receipt
+contract. User input never adds arbitrary CLI flags, hooks, or output templates.
+
+Settings are stored as mode-0600 `data/download-settings.json`, using a temporary
+file plus fsync/replace. In-memory options are published only after successful
+persistence. Failed save/reset leaves prior options active. Invalid saved JSON
+falls back to startup defaults with a visible warning; tokens/cookies are stored
+separately. Defaults retain the existing format, merge, timeout, and retry policy.
+
+`static/download-settings.js` manages a dedicated native dialog loaded after
+`app.js`; it shares the API helper and never participates in library/account
+polling. Drafts survive validation errors and polling. Presets resolve to ordinary
+format selectors, and conditional subtitle/custom-format controls keep common
+settings compact. Settings controls are disabled during load/save/reset.
+
 ### Download cookies
 
 `GET /api/cookies` returns source metadata only. `POST /api/cookies` selects a
@@ -208,6 +235,11 @@ original YouTube URL independently of download status or local playback.
 The custom playlist dialog preserves input on validation failure and disables
 submission while creating. It makes no account request and does not auto-start
 downloads. Successful creation navigates to the resulting local library.
+Imports have no video-count cap; a 2-million-character input bound limits request
+size. Detail views filter/search the full snapshot, then render 100 rows at a
+time. Changing search/filter resets the page; polling clamps pages to the current
+result count. API snapshots remain complete so queue and metadata semantics are
+unchanged.
 Two-second polling stops when the document is hidden and avoids overlapping
 requests. Polls preserve focused card controls; dialogs/search remain outside
 the rerendered list. Download work continues independently of the tab.

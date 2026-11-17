@@ -4,7 +4,6 @@ from urllib.parse import parse_qs, urlsplit
 
 from .config import VIDEO_ID
 
-MAX_VIDEOS = 500
 YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"}
 EMBED_HOSTS = {"youtube-nocookie.com", "www.youtube-nocookie.com"}
 SHORT_HOSTS = {"youtu.be", "www.youtu.be"}
@@ -50,8 +49,6 @@ def parse_video_urls(text: str) -> list[str]:
     ]
     if not lines:
         raise ValueError("Paste at least one YouTube video URL.")
-    if len(lines) > MAX_VIDEOS:
-        raise ValueError(f"Use at most {MAX_VIDEOS} video URLs per playlist.")
     ids, invalid = [], []
     seen = set()
     for number, line in lines:

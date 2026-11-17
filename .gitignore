@@ -18,6 +18,8 @@ cookies*.txt
 cookies.json
 cookie-sessions/
 .cookies-*
+download-settings.json
+.download-settings-*
 output/
 .playwright-cli/
 .DS_Store

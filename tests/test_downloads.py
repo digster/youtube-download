@@ -19,6 +19,7 @@ from youtube_download.downloads import (
     error_status,
 )
 from youtube_download.cookies import CookieSettings
+from youtube_download.download_settings import DownloadOptions
 
 
 def wait_for(predicate, timeout=8):
@@ -89,7 +90,7 @@ partial.unlink()
     calls = []
 
     def command(*args):
-        calls.append(1)
+        calls.append(args[4])
         return [sys.executable, "-c", script, str(folder)]
 
     monkeypatch.setattr("youtube_download.downloads.build_command", command)
@@ -98,6 +99,10 @@ partial.unlink()
     try:
         manager.enqueue(playlist_id)
         wait_for(lambda: (folder / "video.part").exists())
+        # Saved settings change only future launches; the running command keeps
+        # its immutable snapshot, and resume picks up the new retry preference.
+        manager.download_settings.configure({"retries": 7})
+        assert calls[0].retries == 3
         manager.pause(playlist_id)
         wait_for(lambda: manager.active_playlist is None)
         assert store.playlist(playlist_id)["state"] == "paused"
@@ -109,6 +114,7 @@ partial.unlink()
         manager.enqueue(playlist_id)
         wait_for(lambda: store.playlist(playlist_id)["state"] == "completed")
         assert len(calls) == 2
+        assert calls[1].retries == 7
     finally:
         manager.close()
 
@@ -212,7 +218,13 @@ def test_real_yt_dlp_subprocess_downloads_local_media(settings, tmp_path, with_c
         )
     try:
         with cookies.snapshot() as current:
-            command = build_command(current, PID, VID)
+            command = build_command(
+                current, PID, VID,
+                options=DownloadOptions(
+                    retries=5, fragment_retries=5, socket_timeout=30,
+                    concurrent_fragments=2, limit_rate="5M",
+                ),
+            )
             command[-1] = f"http://127.0.0.1:{server.server_port}/fixture.mp4"
             result = subprocess.run(command, capture_output=True, text=True, timeout=25)
             assert result.returncode == 0, result.stderr + result.stdout

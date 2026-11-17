@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.concurrency import run_in_threadpool
 from google.auth.exceptions import RefreshError
@@ -22,6 +22,7 @@ from .auth import GoogleLogin, LoginError, MAX_CONFIG_BYTES
 from .config import PLAYLIST_ID, VIDEO_ID, Settings, contained_file
 from .cookies import CookieError, CookieSettings, MAX_COOKIE_BYTES
 from .custom_playlists import parse_video_urls
+from .download_settings import DownloadSettings
 from .downloads import DownloadManager
 from .finder import Finder
 from .store import Store
@@ -43,7 +44,7 @@ class CookieUpdate(BaseModel):
 
 class CustomPlaylistCreate(BaseModel):
     title: str = Field(max_length=200)
-    urls: str = Field(max_length=200_000)
+    urls: str = Field(max_length=2_000_000)
 
 
 def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
@@ -55,7 +56,8 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
     login = GoogleLogin(settings, account.save_credentials)
     finder = Finder(store, settings.finder_url)
     cookies = CookieSettings(settings)
-    manager = DownloadManager(store, settings, finder, cookies)
+    download_settings = DownloadSettings(settings)
+    manager = DownloadManager(store, settings, finder, cookies, download_settings)
     operations = Lock()
 
     @asynccontextmanager
@@ -85,6 +87,7 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
     app.state.store, app.state.manager, app.state.finder = store, manager, finder
     app.state.login = login
     app.state.cookies = cookies
+    app.state.download_settings = download_settings
     app.add_middleware(
         TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "[::1]"]
     )
@@ -172,6 +175,35 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
             "cookie_settings": cookie_status,
             "free_bytes": shutil.disk_usage(settings.download_dir).free,
         }
+
+    @app.get("/api/download-settings")
+    def get_download_settings():
+        return download_settings.status()
+
+    def download_settings_call(function, *args):
+        try:
+            return function(*args)
+        except ValidationError as exc:
+            error = exc.errors()[0]
+            field = ".".join(str(part) for part in error["loc"])
+            message = error["msg"].removeprefix("Value error, ")
+            raise HTTPException(
+                400, f"{field}: {message}" if field else message
+            ) from exc
+        except OSError as exc:
+            logger.warning("Could not save download settings (%s)", type(exc).__name__)
+            raise HTTPException(
+                500,
+                "Could not save download settings. Check the data folder's permissions.",
+            ) from exc
+
+    @app.post("/api/download-settings")
+    def configure_download_settings(update: dict):
+        return download_settings_call(download_settings.configure, update)
+
+    @app.post("/api/download-settings/reset")
+    def reset_download_settings():
+        return download_settings_call(download_settings.reset)
 
     @app.get("/api/cookies")
     def cookie_status():

@@ -42,3 +42,12 @@
 - Metadata sidecars enrich a verified download but do not establish completion.
   Keep optional metadata access inside error handling, including containment
   checks, so missing or unreadable metadata cannot fail completed media.
+- Validate speed limits with yt-dlp's current `utils.parse_bytes`, not only a
+  positive-number check: tiny fractional byte values round down to zero and
+  fail its CLI validation. The older FileDownloader helper is deprecated.
+- Bound custom-import request size rather than imposing a low video count.
+  Large playlists need bounded DOM rendering; keep search/filter over the full
+  saved snapshot before selecting the current page.
+- Keep download preferences immutable per subprocess. Persist the new file
+  before publishing an updated in-memory snapshot, so failed writes cannot
+  silently change the next download's behavior.

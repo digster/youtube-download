@@ -1289,6 +1289,91 @@ video {
   font-size: 12px;
   margin: 14px 0 8px;
 }
+
+/* Download preferences use their own dialog so long cookie/account forms do not
+   hide everyday quality controls. Each field remains usable on narrow screens. */
+#download-settings-dialog {
+  width: 720px;
+  max-width: min(720px, calc(100vw - 32px));
+}
+#download-settings-fields {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.download-settings-section {
+  padding: 18px 0;
+  border-top: 1px solid var(--line);
+}
+.download-settings-section h3 {
+  margin: 0 0 14px;
+}
+.download-settings-section summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.download-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+#download-settings-form label {
+  display: block;
+  margin: 12px 0 7px;
+  font-size: 12px;
+  font-weight: 600;
+}
+#download-settings-form input:not([type="checkbox"]),
+#download-settings-form select {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fafbf8;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+}
+#download-settings-form input:focus-visible,
+#download-settings-form select:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
+#download-settings-form .download-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 400;
+}
+.download-checkbox input {
+  flex-shrink: 0;
+}
+.sidebar-bottom .setup-button + .setup-button {
+  margin-top: 14px;
+}
+.video-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 18px;
+  color: var(--muted);
+  font-size: 12px;
+}
+@media (max-width: 600px) {
+  .download-settings-grid {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+  .sidebar-bottom .setup-button + .setup-button {
+    margin-top: 9px;
+  }
+}
 #auth-client-file {
   display: block;
   max-width: 100%;

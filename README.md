@@ -10,6 +10,8 @@ required. Supported platforms: macOS and Linux.
 - Connect or reconnect Google directly from **Account & setup**, without a terminal command.
 - Choose Firefox, Safari, Chrome, or another supported browser for download
   cookies, or upload cookies.txt directly from **Account & setup**.
+- Configure yt-dlp quality, merge container, subtitles, metadata, speed, and
+  retries from **Download settings**, with saved preferences and a defaults reset.
 - List your account's owned playlists, including private playlists and Liked videos.
 - Create custom local playlists by pasting YouTube video URLs, without Google login.
 - Open the original YouTube playlist from its card or library page, and the
@@ -200,6 +202,38 @@ Working copies are removed after use; startup removes leftovers from crashes.
 Switching sources replaces the saved upload. Cookies, OAuth files, media, and
 runtime data are excluded from Git.
 
+### yt-dlp download settings
+
+Open **Download settings** in the sidebar. Choose a quality preset (best
+available or a maximum resolution from 480p to 4K), a container for merging,
+subtitle languages, embedded subtitles/metadata, and optional thumbnail files.
+Expand **Speed & retries** to set a speed limit, parallel fragments, download
+and fragment retries, network timeout, or a delay before each video.
+
+Click **Save download settings**. Preferences persist in
+`<YTDL_DATA_DIR>/download-settings.json` and apply when the next video starts,
+without restarting. An already running video keeps its current options. To
+apply changes to it, pause and retry. Completed files are not downloaded again;
+keep quality/format unchanged when resuming partial files to maximize reuse.
+
+**Restore startup defaults** removes the saved override and restores the
+current `YTDL_FORMAT` plus Shelf's default transfer options. Cookies remain
+independently configurable through **Account & setup**; a link in the download
+dialog opens that flow.
+
+**Custom format selector** supports yt-dlp's single-output selectors, including
+`+` merges and `/` fallbacks. Multiple-output selectors (`all` or comma-separated
+formats) are excluded because Shelf records one finished media file per video.
+Output paths, completion receipts, and resume options remain managed by Shelf.
+See the [yt-dlp format documentation](https://github.com/yt-dlp/yt-dlp#format-selection).
+
+The quality preset is a maximum, not an upscale. The merge container applies
+only when combining streams, so a single-file download may keep its original
+extension. Subtitle languages accept codes/wildcards such as `en.*,ja` or
+`all,-live_chat`. Speed limits are bytes per second (`500K`, `2.5M`); blank means
+unlimited. Parallel fragments speed up supported segmented streams, while
+playlists continue to download one video at a time.
+
 ## Using the library
 
 1. **Sync playlists**, then select cards or open an individual playlist.
@@ -223,10 +257,15 @@ may still be unavailable there.
 ### Create a custom playlist from video URLs
 
 Click **Create playlist**, enter a name, and paste one YouTube video URL per
-line (up to 500). Standard watch links, youtu.be links, Shorts, live, and embed
+line. There is no video-count cap. Standard watch links, youtu.be links, Shorts, live, and embed
 links are supported. Duplicate videos are saved once, in first-seen order;
 timestamps and tracking parameters are discarded. Invalid URLs are reported
 by line number, and nothing is created until every line is valid.
+
+Large library pages show 100 videos at a time with Previous/Next controls;
+search and filters still cover the whole playlist. Pasted input is bounded at
+2 million characters to limit request size, rather than limiting the number of
+videos. Longer exports can be split into separate custom playlists.
 
 Creation opens the new local library; click **Download** when ready. Custom
 playlists use the same queue, pause/resume, folder changes, and archive lookup
@@ -301,7 +340,7 @@ Copy `.env.example` to `.env`; all settings are optional.
 | `YTDL_CLIENT_SECRETS` | empty | Optional Google Desktop OAuth client JSON; otherwise auto-detected |
 | `YTDL_COOKIES_FILE` | empty | Default Netscape-format cookie file; UI selection overrides it |
 | `YTDL_COOKIES_BROWSER` | empty | Default browser/profile; UI selection overrides it |
-| `YTDL_FORMAT` | `bv*+ba/b` | yt-dlp format selector; best video and audio by default |
+| `YTDL_FORMAT` | `bv*+ba/b` | Startup yt-dlp format selector; saved Download settings take precedence |
 | `YTDL_FINDER_URL` | `https://findyoutubevideo.thetechrobo.ca` | youtubevideofinder API base URL |
 
 Relative paths resolve from the directory where the server starts. Prefer
@@ -318,6 +357,7 @@ uv sync --locked
 uv run pytest -q
 uv run pytest --cov=youtube_download --cov-report=term-missing
 node --check src/youtube_download/static/app.js
+node --check src/youtube_download/static/download-settings.js
 ```
 
 Tests use temporary directories and mocked account/finder responses. The real
@@ -334,6 +374,10 @@ failures, byte-range playback, and path/symlink containment.
 Custom playlist tests cover URL validation and deduplication, atomic creation,
 operation without Google, original source links, custom pause/resume, downloaded
 metadata, folder collisions, long Unicode names, and legacy directory migration.
+They also import 5,001 videos without truncation or reordering. Download-setting
+tests cover installed yt-dlp argument parsing, resolution fallback selection,
+validation, private atomic persistence, failed writes, corrupt settings, reset,
+and changing preferences while a previous transfer retains its snapshot.
 Authentication tests cover PKCE, read-only scopes, success/denial, cancelled and
 expired callbacks, duplicate clicks, bad callback state, failed exchanges,
 invalid client files, and atomic token replacement. Browser QA uses a mock

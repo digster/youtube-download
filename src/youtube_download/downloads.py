@@ -13,13 +13,18 @@ import time
 
 from .config import PLAYLIST_ID, VIDEO_ID, contained_file
 from .cookies import CookieError, CookieSettings
+from .download_settings import DownloadOptions, DownloadSettings
 from .store import now
 
 logger = logging.getLogger(__name__)
 
 
 def build_command(
-    settings, playlist_id: str, video_id: str, directory: Path | None = None
+    settings,
+    playlist_id: str,
+    video_id: str,
+    directory: Path | None = None,
+    options: DownloadOptions | None = None,
 ) -> list[str]:
     if not PLAYLIST_ID.fullmatch(playlist_id) or not VIDEO_ID.fullmatch(video_id):
         raise ValueError("Invalid playlist or video ID")
@@ -44,19 +49,9 @@ def build_command(
         "--progress",
         "--progress-delta",
         "1",
-        "--socket-timeout",
-        "20",
-        "--retries",
-        "3",
-        "--fragment-retries",
-        "3",
         "--abort-on-unavailable-fragments",
         "--js-runtimes",
         "node",
-        "--format",
-        settings.format,
-        "--merge-output-format",
-        "mp4/mkv",
         "--write-info-json",
         "--no-simulate",
         "--output",
@@ -67,6 +62,7 @@ def build_command(
         "after_move:%(filepath)j",
         str(folder / ".completed.jsonl"),
     ]
+    command.extend((options or DownloadOptions(format=settings.format)).arguments())
     if settings.cookies_file:
         command.extend(
             ["--cookies", str(Path(settings.cookies_file).expanduser().resolve())]
@@ -120,9 +116,10 @@ def error_status(message: str) -> str:
 
 
 class DownloadManager:
-    def __init__(self, store, settings, finder, cookies=None):
+    def __init__(self, store, settings, finder, cookies=None, download_settings=None):
         self.store, self.settings, self.finder = store, settings, finder
         self.cookies = cookies or CookieSettings(settings)
+        self.download_settings = download_settings or DownloadSettings(settings)
         self.stop = threading.Event()
         self.wake = threading.Event()
         self.lock = threading.RLock()
@@ -306,7 +303,10 @@ class DownloadManager:
 
     def _download_video_with_settings(self, playlist_id, video_id, settings):
         directory = self.store.playlist_directory(playlist_id)
-        command = build_command(settings, playlist_id, video_id, directory)
+        command = build_command(
+            settings, playlist_id, video_id, directory,
+            self.download_settings.snapshot(),
+        )
         with self.lock:
             if self._interrupted(playlist_id):
                 return
