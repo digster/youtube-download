@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#152b2c" />
+    <title>Shelf · YouTube Download</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/static/style.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <aside class="sidebar">
+      <a class="brand" href="/" aria-label="Shelf home"
+        ><span class="brand-icon">▤</span
+        ><span>Shelf<small>YOUR YOUTUBE, OFFLINE</small></span></a
+      >
+      <div class="nav-label">WORKSPACE</div>
+      <nav aria-label="Library navigation">
+        <a href="/" data-nav="all"
+          ><span aria-hidden="true">▦</span> Playlists
+          <b id="nav-count">0</b></a
+        >
+        <a href="/?view=downloaded" data-nav="downloaded"
+          ><span aria-hidden="true">↓</span> Downloaded</a
+        >
+        <a href="/?view=attention" data-nav="attention"
+          ><span aria-hidden="true">◷</span> Needs attention</a
+        >
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="local-label">
+          <span class="dot"></span> Runs on your computer
+        </div>
+        <p>Your library stays on disk.<br />Your progress stays with it.</p>
+        <button class="setup-button" data-action="setup">
+          <span aria-hidden="true">⚙</span> Account & setup
+          <span aria-hidden="true">↗</span>
+        </button>
+      </div>
+    </aside>
+    <div class="workspace">
+      <header class="topbar">
+        <div class="breadcrumb" id="breadcrumb">
+          Workspace <span>/</span> Playlists
+        </div>
+        <div class="connection" id="connection">
+          <span class="dot"></span> Local library
+        </div>
+      </header>
+      <main id="main">
+        <div id="notice" role="status" aria-live="polite" hidden></div>
+        <section class="page-heading">
+          <div>
+            <div class="eyebrow">A LITTLE LESS TEMPORARY</div>
+            <h1 id="page-title">Your playlists, kept close.</h1>
+            <p id="page-description">
+              Choose what to save. Pick up where you left off. Make it yours to
+              keep.
+            </p>
+          </div>
+          <div id="page-actions">
+            <button class="button primary" data-action="sync">
+              ↻ <span>Sync playlists</span>
+            </button>
+          </div>
+        </section>
+        <section
+          class="stats"
+          id="stats"
+          aria-label="Library summary"
+        ></section>
+        <section class="collection">
+          <div class="collection-header">
+            <div>
+              <h2 id="collection-title">All playlists</h2>
+              <p id="collection-description">From your YouTube account</p>
+            </div>
+            <label class="search"
+              ><span aria-hidden="true">⌕</span
+              ><input
+                id="search"
+                type="search"
+                placeholder="Search playlists…"
+                aria-label="Search playlists"
+            /></label>
+          </div>
+          <div class="filters" id="filters" aria-label="Filter library"></div>
+          <div id="content" aria-busy="true">
+            <div class="empty">
+              <div class="empty-icon">▤</div>
+              <h3>Opening your library…</h3>
+              <p>Reading saved playlists and download progress.</p>
+            </div>
+          </div>
+        </section>
+        <footer class="page-footer">
+          <span
+            ><span class="dot"></span> Saved locally. Ready when you are.</span
+          ><span>Powered by yt-dlp</span>
+        </footer>
+      </main>
+    </div>
+    <div id="selection-bar" class="selection-bar" hidden>
+      <span id="selection-count"></span
+      ><button class="button quiet" data-action="clear-selection">Clear</button
+      ><button class="button primary" data-action="download-selected">
+        ↓ Download selected
+      </button>
+    </div>
+    <dialog id="setup-dialog" aria-labelledby="setup-title">
+      <div class="dialog-heading">
+        <h2 id="setup-title">Account & setup</h2>
+        <button class="icon-button" data-close aria-label="Close setup">
+          ×
+        </button>
+      </div>
+      <div id="setup-content"></div>
+    </dialog>
+    <dialog
+      id="player-dialog"
+      class="player-dialog"
+      aria-labelledby="player-title"
+    >
+      <div class="dialog-heading">
+        <h2 id="player-title">Local video</h2>
+        <button class="icon-button" data-close aria-label="Close player">
+          ×
+        </button>
+      </div>
+      <video id="player" controls playsinline preload="metadata"></video>
+      <p class="muted">
+        If this format cannot play in your browser, save the file and open it in
+        your video player.
+      </p>
+      <a id="player-download" class="button secondary" download
+        >↓ Save video file</a
+      >
+    </dialog>
+    <dialog id="recovery-dialog" aria-labelledby="recovery-title">
+      <div class="dialog-heading">
+        <h2 id="recovery-title">Find an archived copy</h2>
+        <button
+          class="icon-button"
+          data-close
+          aria-label="Close archive results"
+        >
+          ×
+        </button>
+      </div>
+      <div id="recovery-content"></div>
+    </dialog>
+    <dialog id="folder-dialog" aria-labelledby="folder-title">
+      <div class="dialog-heading">
+        <h2 id="folder-title">Playlist download folder</h2>
+        <button
+          class="icon-button"
+          data-close
+          aria-label="Close folder settings"
+        >
+          ×
+        </button>
+      </div>
+      <p>
+        Moved this playlist? Select its new folder to reconnect the local
+        videos. Future downloads will also go here.
+      </p>
+      <form id="folder-form">
+        <label for="folder-path">Folder path</label
+        ><input
+          id="folder-path"
+          name="directory"
+          required
+          autocomplete="off"
+          placeholder="/Volumes/Media/My playlist"
+        />
+        <p class="muted">
+          Choose the playlist folder containing the video ID subfolders. Keep
+          the contents and filenames unchanged. This updates the location; it
+          does not move files.
+        </p>
+        <p id="folder-error" role="alert" hidden></p>
+        <button class="button primary" type="submit">
+          Save & recheck files
+        </button>
+      </form>
+    </dialog>
+  </body>
+</html>

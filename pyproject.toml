@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "youtube-download"
+version = "0.1.0"
+description = "A local playlist library with resumable YouTube downloads"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "digster", email = "3542726+digster@users.noreply.github.com" }]
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115", "uvicorn>=0.34", "httpx>=0.28",
+  "python-dotenv>=1.0", "yt-dlp[default]>=2026.3.17", "youtube-backup",
+]
+
+[project.scripts]
+youtube-download = "youtube_download.cli:main"
+
+[tool.uv.sources]
+youtube-backup = { path = "../youtube-backup" }
+
+[dependency-groups]
+dev = ["pytest>=8.3", "pytest-cov>=6.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/youtube_download"]
