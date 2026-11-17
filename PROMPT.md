@@ -98,3 +98,10 @@ to commit on the user's behalf.
 ## 2026-11-16 — Commit authorization reminder
 
 I had asked you to do the commits for me.
+
+## 2026-11-16 — Safari cookie permission failure
+
+Getting this error for all videos. What could be the issue?
+
+Attached screenshot shows yt-dlp reporting `ERROR: [Errno 1] Operation not
+permitted` when accessing Safari's `Cookies.binarycookies` file.

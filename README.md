@@ -125,6 +125,15 @@ does not verify that it is installed or signed in. Errors appear on the video's
 library row. The UI uses yt-dlp's supported
 [`--cookies-from-browser` option](https://github.com/yt-dlp/yt-dlp#filesystem-options).
 
+If every video fails with `Operation not permitted` for Safari's
+`Cookies.binarycookies`, macOS is blocking cookie extraction before the video
+download starts. Grant access to the terminal/app that launches Shelf (for
+example Terminal or iTerm), quit and reopen that app, restart Shelf, and choose
+**Resume / retry**. Changing Google OAuth login will not fix this filesystem
+permission. Alternatively, sign in to YouTube in Firefox or Chrome and select
+that browser in setup. For public videos, **No cookies** also avoids Safari
+extraction, though some videos may still require authentication.
+
 Choose **No cookies** to disable cookies, including any startup default. **Use
 startup defaults** removes the UI override and restores the following optional
 `.env` settings (only one may be set):
