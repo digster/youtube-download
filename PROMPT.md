@@ -105,3 +105,10 @@ Getting this error for all videos. What could be the issue?
 
 Attached screenshot shows yt-dlp reporting `ERROR: [Errno 1] Operation not
 permitted` when accessing Safari's `Cookies.binarycookies` file.
+
+## 2026-11-16 — Firefox cookie discovery failure
+
+Tried Firefox and got this error.
+
+Attached screenshot shows `could not find firefox cookies database` in the
+default macOS Firefox Profiles directory.

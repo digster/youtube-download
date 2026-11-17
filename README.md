@@ -134,6 +134,16 @@ permission. Alternatively, sign in to YouTube in Firefox or Chrome and select
 that browser in setup. For public videos, **No cookies** also avoids Safari
 extraction, though some videos may still require authentication.
 
+Firefox's `could not find firefox cookies database` can also mean access is
+blocked: yt-dlp's directory search suppresses directory-read errors. Check
+**Full Disk Access** for the app that starts Shelf, not only the browser. If
+Shelf starts in iTerm2, grant iTerm2 access and fully quit/reopen it before
+restarting Shelf. If permissions are already correct, open `about:support` in
+Firefox and use **Profile Folder → Show in Finder** to locate the active profile.
+Enter that full folder path in Shelf's **Profile & advanced options**, save,
+and retry. The path should be a profile folder containing `cookies.sqlite`,
+not the database file itself. See [Mozilla's profile guide](https://support.mozilla.org/en-US/kb/profiles-where-firefox-stores-user-data).
+
 Choose **No cookies** to disable cookies, including any startup default. **Use
 startup defaults** removes the UI override and restores the following optional
 `.env` settings (only one may be set):

@@ -32,3 +32,7 @@
   Netscape exports before passing them to yt-dlp and return generic errors.
 - Browser profile paths are not interchangeable: Safari expects a binarycookies
   file where Firefox/Chromium accept profiles. Clear drafts when browsers change.
+- yt-dlp's cookie-file discovery uses os.walk without an error callback. An
+  unreadable Firefox profile directory can therefore report a missing database.
+  Use explicit directory enumeration when diagnosing; pathlib glob and
+  ConfigParser.read can also hide permission errors.
