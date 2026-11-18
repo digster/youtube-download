@@ -42,6 +42,7 @@ async function testLibraryRendering(page) {
     thumbnail: playlist.thumbnail,
   }));
   let failedImages = 0;
+  let rejectNextSelection = false;
   await page.route(origin + "/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === "/api/status") return route.fulfill({ json: { login: {} } });
@@ -49,10 +50,17 @@ async function testLibraryRendering(page) {
       return route.fulfill({ json: { playlists } });
     if (path === "/api/playlists/active")
       return route.fulfill({ json: { playlist, videos } });
-    if (path === "/api/playlists/active/videos/video-1/skip" && route.request().method() === "POST") {
-      videos[0].download_skipped = route.request().postDataJSON().skipped;
-      playlist.skipped = Number(videos[0].download_skipped);
-      return route.fulfill({ json: { skipped: videos[0].download_skipped } });
+    if (path.endsWith("/skip") && route.request().method() === "POST") {
+      if (rejectNextSelection) {
+        rejectNextSelection = false;
+        return route.fulfill({ status: 409, json: { detail: "Selection could not be saved." } });
+      }
+      const { skipped } = route.request().postDataJSON();
+      const targets = path === "/api/playlists/active/videos/skip"
+        ? videos : videos.filter((v) => path === `/api/playlists/active/videos/${v.id}/skip`);
+      for (const v of targets) v.download_skipped = skipped;
+      playlist.skipped = videos.filter((v) => v.download_skipped && !v.local_available).length;
+      return route.fulfill({ json: { skipped } });
     }
     if (
       path === "/api/playlists/active/pause" &&
@@ -266,6 +274,16 @@ async function testLibraryRendering(page) {
     (await page.locator(".video-row").count()) === 1,
     "Pagination retained off-page rows",
   );
+  const all = page.getByRole("checkbox", { name: "Include all videos for download" });
+  await all.uncheck();
+  await page.getByText("101 skipped", { exact: false }).waitFor();
+  check(videos.every((v) => v.download_skipped), "Bulk change missed off-page videos");
+  await search.fill("Extra video 98");
+  await all.check();
+  await page.waitForFunction(() => !document.querySelector("#include-all").disabled);
+  check(videos.every((v) => !v.download_skipped), "Bulk change missed search-hidden videos");
+  await search.fill("");
+  await page.getByRole("button", { name: "Next" }).click();
   videos.splice(2);
   playlist.total = videos.length;
   await page.clock.runFor(2000);
@@ -274,8 +292,10 @@ async function testLibraryRendering(page) {
     (await page.locator(".video-row").count()) === 2,
     "Polling failed to clamp the video page",
   );
-  await page.getByRole("button", { name: "Skip download" }).first().click();
-  await page.getByRole("button", { name: "Include again" }).waitFor();
+  const firstChoice = page.getByRole("checkbox", { name: "Include Updated title in downloads" });
+  await firstChoice.uncheck();
+  await page.getByText("1 skipped", { exact: false }).waitFor();
+  check(await all.evaluate((input) => input.indeterminate), "Master checkbox failed to show mixed state");
   await page.reload();
   await page.getByRole("button", { name: "Skipped", exact: true }).click();
   check(await page.locator(".video-row").count() === 1, "Skipped filter included other videos");
@@ -283,9 +303,15 @@ async function testLibraryRendering(page) {
   await page.getByRole("heading", { name: "video-2" }).waitFor();
   check(await page.locator(".video-row").count() === 1, "Skipped failure still needs attention");
   await page.getByRole("button", { name: "Skipped", exact: true }).click();
-  await page.getByRole("button", { name: "Include again" }).click();
+  await firstChoice.check();
   await page.getByText("No videos in this view.").waitFor();
   await page.getByRole("button", { name: "All videos" }).click();
-  check(await page.getByRole("button", { name: "Skip download" }).count() === 2, "Include did not restore the video");
-  return "Playlist rendering, skip and include controls passed.";
+  check(await all.isChecked(), "Master checkbox failed to return to checked");
+  rejectNextSelection = true;
+  await all.click();
+  await page.getByText("Selection could not be saved.").waitFor();
+  await page.waitForFunction(() => !document.querySelector("#include-all").disabled);
+  check(await all.isChecked() && await firstChoice.isChecked(), "A rejected change left checkboxes out of sync");
+  check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "Checkboxes overflowed the viewport");
+  return "Playlist rendering and individual, mixed and bulk download selection passed.";
 }

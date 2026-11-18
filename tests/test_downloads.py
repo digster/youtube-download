@@ -131,8 +131,9 @@ def test_unavailable_video_does_not_block_later_video(store, settings, monkeypat
     assert store.playlist(PID)["state"] == "completed_with_errors"
 
 
+@pytest.mark.parametrize("bulk", [False, True])
 def test_skip_active_and_upcoming_videos_then_include_again(
-    store, settings, monkeypatch
+    store, settings, monkeypatch, bulk
 ):
     third = "01234567890"
     store.sync_videos(PID, [video(), video(VID2, position=1), video(third, position=2)])
@@ -167,8 +168,13 @@ media.write_bytes(b"complete")
     try:
         manager.enqueue(PID)
         wait_for(partial.exists)
-        manager.set_skipped(PID, VID2, True)
-        manager.set_skipped(PID, VID, True)
+        if bulk:
+            manager.set_skipped(PID, None, True)
+            expected_starts = [VID]
+        else:
+            manager.set_skipped(PID, VID2, True)
+            manager.set_skipped(PID, VID, True)
+            expected_starts = [VID, third]
         wait_for(
             lambda: (
                 store.playlist(PID)["state"] == "completed"
@@ -176,8 +182,8 @@ media.write_bytes(b"complete")
             )
         )
         assert partial.read_bytes() == b"partial"
-        assert started == [VID, third]
-        assert store.playlists()[0]["skipped"] == 2
+        assert started == expected_starts
+        assert store.playlists()[0]["skipped"] == (3 if bulk else 2)
         manager.enqueue(PID)
         wait_for(
             lambda: (
@@ -185,12 +191,12 @@ media.write_bytes(b"complete")
                 and manager.active_playlist is None
             )
         )
-        assert started == [VID, third]
+        assert started == expected_starts
         manager.set_skipped(PID, VID, False)
         manager.enqueue(PID)
         wait_for(lambda: store.playlist(PID)["state"] == "completed")
-        assert started == [VID, third, VID]
-        assert store.playlists()[0]["downloaded"] == 2
+        assert started == [*expected_starts, VID]
+        assert store.playlists()[0]["downloaded"] == (1 if bulk else 2)
         manager.finder.lookup.assert_not_called()
     finally:
         manager.close()

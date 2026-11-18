@@ -178,23 +178,17 @@ class DownloadManager:
             if self.active_playlist == playlist_id:
                 self._terminate()
 
-    def set_skipped(self, playlist_id: str, video_id: str, skipped: bool):
+    def set_skipped(self, playlist_id: str, video_id: str | None, skipped: bool):
         # The flag belongs to one playlist membership. Serializing with launch
         # guarantees a skip either prevents the subprocess or stops that video.
         with self.lock:
-            video = self.store.video(playlist_id, video_id)
-            if not video or not video["in_playlist"]:
-                raise ValueError("This video is no longer in the playlist.")
-            if video["download_skipped"] == skipped:
-                return
-            if skipped and video["local_available"]:
-                raise ValueError("This video has already been downloaded.")
-            self.store.update_video(playlist_id, video_id, download_skipped=skipped)
+            self.store.set_download_skipped(playlist_id, video_id, skipped)
             playlist = self.store.playlist(playlist_id)
             if (
                 skipped
                 and self.active_playlist == playlist_id
-                and playlist["current_video"] == video_id
+                and self.process is not None
+                and (video_id is None or playlist["current_video"] == video_id)
             ):
                 self.process_skipped = True
                 self._terminate()

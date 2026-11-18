@@ -310,9 +310,24 @@ class Store:
             ).fetchone()
         return bool(row["download_skipped"])
 
+    def set_download_skipped(
+        self, playlist_id: str, video_id: str | None, skipped: bool
+    ):
+        # One transaction for the entire selection, including off-page items.
+        # Retained rows do not participate in the download queue.
+        query = (
+            "UPDATE videos SET download_skipped=? WHERE playlist_id=? AND in_playlist=1"
+        )
+        with self.connect() as db:
+            if video_id is None:
+                db.execute(query, (skipped, playlist_id))
+            elif not db.execute(
+                query + " AND id=?", (skipped, playlist_id, video_id)
+            ).rowcount:
+                raise ValueError("This video is no longer in the playlist.")
+
     def update_video(self, playlist_id: str, video_id: str, **fields):
         allowed = {
-            "download_skipped",
             "title",
             "channel",
             "thumbnail",

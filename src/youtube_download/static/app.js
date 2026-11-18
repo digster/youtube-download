@@ -38,6 +38,7 @@ const state = {
   cookieBusy: false,
   creatingPlaylist: false,
   videoPage: 0,
+  pendingInclusion: null,
 };
 const labels = {
   idle: "Not started",
@@ -430,12 +431,15 @@ function renderMetadataPanel(p) {
 function renderVideoRow(row, v) {
   if (!row.firstElementChild) {
     row.className = "video-row";
-    row.innerHTML = `<div class="video-thumb"><div class="art-fallback" aria-hidden="true"></div></div>
+    row.innerHTML = `<label class="video-choice"><input type="checkbox" data-include-video="${escapeHTML(v.id)}" data-focus="include-${escapeHTML(v.id)}"></label>
+      <div class="video-thumb"><div class="art-fallback" aria-hidden="true"></div></div>
       <div class="video-info"><h3></h3><p></p>
         <details hidden><summary>Download details</summary><p></p></details>
         <details class="metadata-error" hidden><summary>Metadata unavailable</summary><p></p></details>
       </div><div class="video-actions"></div>`;
   }
+  const checkbox = row.querySelector("[data-include-video]");
+  checkbox.setAttribute("aria-label", `Include ${v.title} in downloads`);
   renderArtwork(row.querySelector(".art-fallback"), v.thumbnail, "▷");
   setText(row.querySelector("h3"), v.title);
   setMarkup(
@@ -450,15 +454,39 @@ function renderVideoRow(row, v) {
     if (message) setText(disclosure.querySelector("p"), message);
     else if (disclosure.open) disclosure.open = false;
   });
-  const status = v.local_available ? "downloaded" : v.download_skipped ? "skipped" : v.status;
+  const status = v.local_available
+    ? "downloaded"
+    : v.download_skipped ? "skipped" : v.status;
   const id = escapeHTML(v.id);
-  const skip = v.in_playlist && (!v.local_available || v.download_skipped)
-    ? `<button class="button quiet small" data-action="${v.download_skipped ? "include" : "skip"}" data-video="${id}" data-focus="skip-${id}">${v.download_skipped ? "Include again" : "Skip download"}</button>`
-    : "";
   setMarkup(
     row.querySelector(".video-actions"),
-    `${badge(status)}${v.local_available ? `<button class="button secondary small" data-action="play" data-video="${id}">▷ Play</button>` : ["unavailable", "failed"].includes(v.status) ? `<button class="button secondary small" data-action="find" data-video="${id}">${v.recovery ? "Archive links ↗" : "Find archives ↗"}</button>` : ""}${skip}<a class="button quiet small" target="_blank" rel="noopener noreferrer" href="https://www.youtube.com/watch?v=${encodeURIComponent(v.id)}" aria-label="Open ${escapeHTML(v.title)} on YouTube (new tab)">YouTube ↗</a>`,
+    `${badge(status)}${v.local_available ? `<button class="button secondary small" data-action="play" data-video="${id}">▷ Play</button>` : ["unavailable", "failed"].includes(v.status) ? `<button class="button secondary small" data-action="find" data-video="${id}">${v.recovery ? "Archive links ↗" : "Find archives ↗"}</button>` : ""}<a class="button quiet small" target="_blank" rel="noopener noreferrer" href="https://www.youtube.com/watch?v=${encodeURIComponent(v.id)}" aria-label="Open ${escapeHTML(v.title)} on YouTube (new tab)">YouTube ↗</a>`,
   );
+}
+
+function renderDownloadSelection(pageVideos) {
+  // The master checkbox represents the full membership even while searching
+  // or paging. Only the mounted rows need their native controls updated.
+  const pending = state.pendingInclusion;
+  const included = (v) =>
+    !!v.in_playlist && (pending && (!pending.videoId || pending.videoId === v.id)
+      ? pending.checked
+      : !v.download_skipped);
+  const members = state.videos.filter((v) => v.in_playlist);
+  const checked = members.filter(included).length;
+  const all = $("#include-all");
+  setHidden($("#download-selection"), !members.length);
+  all.checked = members.length > 0 && checked === members.length;
+  all.indeterminate = checked > 0 && checked < members.length;
+  all.disabled = !members.length || !!pending;
+  setText($("#included-count"), `${checked} of ${members.length} included`);
+  for (const video of pageVideos) {
+    const input = renderedItems.get(video.id).node.querySelector("[data-include-video]");
+    const selected = included(video);
+    const disabled = !video.in_playlist || !!pending;
+    if (input.checked !== selected) input.checked = selected;
+    if (input.disabled !== disabled) input.disabled = disabled;
+  }
 }
 
 function renderDetail() {
@@ -499,12 +527,12 @@ function renderDetail() {
         .includes(state.search.toLowerCase()) &&
       (state.filter === "all" ||
         (state.filter === "downloaded" && v.local_available) ||
-        (state.filter === "skipped" && v.download_skipped && !v.local_available) ||
+        (state.filter === "skipped" && v.in_playlist && v.download_skipped) ||
         (state.filter === "attention" && videoNeedsAttention(v))),
   );
   setMarkup(
     $("#library-info"),
-    '<div id="folder-info"></div><div id="metadata-info"></div><div id="page-info"></div><div id="result-info"></div>',
+    '<div id="folder-info"></div><div id="metadata-info"></div><div id="page-info"></div><div class="download-selection" id="download-selection" hidden><label><input id="include-all" type="checkbox"> Include all videos for download</label><span id="included-count"></span></div><div id="result-info"></div>',
   );
   setMarkup(
     $("#folder-info"),
@@ -532,11 +560,9 @@ function renderDetail() {
   else if (!shown.length)
     content += `<div class="empty"><div class="empty-icon">▤</div><h3>No videos in this view.</h3><p>${p.source === "custom" ? "Try another filter or search." : "Try another filter, or refresh the playlist to check for new videos."}</p></div>`;
   setMarkup($("#result-info"), content);
-  renderItems(
-    p.items_synced_at ? pageVideos : [],
-    "video-list",
-    renderVideoRow,
-  );
+  const visibleVideos = p.items_synced_at ? pageVideos : [];
+  renderItems(visibleVideos, "video-list", renderVideoRow);
+  renderDownloadSelection(visibleVideos);
 }
 
 function render() {
@@ -965,21 +991,6 @@ document.addEventListener("click", async (event) => {
     await findArchives(button.dataset.video);
     return;
   }
-  if (action === "skip" || action === "include") {
-    button.disabled = true;
-    try {
-      await api(`${apiPath()}/videos/${encodeURIComponent(button.dataset.video)}/skip`, "POST", {
-        skipped: action === "skip",
-      });
-      notice(action === "skip" ? "Video skipped for this playlist." : "Video included in playlist downloads again.");
-    } catch (error) {
-      notice(error.message, true);
-    } finally {
-      await reload(true);
-      button.disabled = false;
-    }
-    return;
-  }
   button.disabled = true;
   if (id) state.busy.add(id);
   try {
@@ -1042,8 +1053,32 @@ document.addEventListener("click", async (event) => {
   }
 });
 
+async function saveDownloadSelection(input) {
+  const { checked } = input;
+  const videoId = input.dataset.includeVideo;
+  const focused = document.activeElement === input;
+  state.pendingInclusion = { videoId, checked };
+  render();
+  try {
+    const suffix = videoId ? `/${encodeURIComponent(videoId)}` : "";
+    await api(`${apiPath()}/videos${suffix}/skip`, "POST", { skipped: !checked });
+  } catch (error) {
+    notice(error.message, true);
+  } finally {
+    await reload(true);
+    state.pendingInclusion = null;
+    render();
+    if (focused && input.isConnected && document.activeElement === document.body)
+      input.focus({ preventScroll: true });
+  }
+}
+
 document.addEventListener("change", (event) => {
   const input = event.target;
+  if (input.id === "include-all" || input.matches("[data-include-video]")) {
+    saveDownloadSelection(input);
+    return;
+  }
   if (input.id === "cookie-source" || input.id === "cookie-browser") {
     // Profiles belong to a browser; a Firefox profile is not a Safari database.
     if (input.id === "cookie-browser") {

@@ -69,3 +69,11 @@
 - Video thumbnail slots clip their contents. A decoded image with the right
   dimensions can still sit below the fallback. Scroll the slot into view and
   check which element the browser displays at its center.
+- A playlist run snapshots membership before transfer. Check the current
+  selection again under the subprocess launch lock so a checkbox changed
+  during an earlier transfer takes effect. Track an interrupted process
+  separately from the saved checkbox so a quick recheck cannot turn its exit
+  into a download failure.
+- Create searchable title files exclusively inside the recorded video's
+  directory. A previous marker may contain user notes, and an external drive
+  may have disappeared between the library read and the filesystem write.

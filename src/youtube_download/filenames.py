@@ -2,9 +2,9 @@
 
 import logging
 import os
-from pathlib import Path
 import re
 import stat
+from pathlib import Path
 
 from .config import VIDEO_ID
 

@@ -220,3 +220,5 @@ continue
 Attached screenshot shows video-ID folders containing media and metadata named by ID.
 
 Also do the commits for me.
+
+Actually make it a checkbox for all the videos and have the top checkbox to enable or disable all.

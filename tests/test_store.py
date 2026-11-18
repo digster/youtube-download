@@ -10,7 +10,7 @@ def test_existing_memberships_default_to_included_after_upgrade(store):
         db.execute("ALTER TABLE videos DROP COLUMN download_skipped")
     reopened = Store(store.path, store.download_dir)
     assert not reopened.download_skipped(PID, VID)
-    reopened.update_video(PID, VID, download_skipped=True)
+    reopened.set_download_skipped(PID, VID, True)
     reopened.sync_videos(PID, [video(VID2)])
     reopened.sync_videos(PID, [video(), video(VID2)])
     assert Store(store.path, store.download_dir).video(PID, VID)["download_skipped"]

@@ -251,11 +251,14 @@ playlists continue to download one video at a time.
 5. For missing videos, open **Archive links / Find archives**. Links are also
    fetched automatically when a queued video is identified as unavailable.
 
-Use **Skip download** on a video row to exclude it from this playlist's
-downloads and retries. Skipping the active transfer keeps its partial files
-and lets the queue continue. The choice survives refreshes and restarts.
-Open the **Skipped** filter and choose **Include again** to undo it. If the
-queue has already passed that video, start the playlist again to pick it up.
+Each video in the playlist has a download checkbox. Clear it to skip that
+video or check it to include it again. **Include all videos for download**
+changes every current video, including those hidden by filters, search or
+pagination. A dash means some videos are included. Clearing the active video
+keeps its partial files and advances the queue. Already saved videos remain
+playable. Selections survive refreshes and restarts. Use the **Skipped** filter
+to find unchecked videos. If the queue has already passed a video you check,
+start the playlist again to pick it up.
 
 Synced playlists have a **YouTube playlist ↗** link on both their card and
 library page. Every video has a **YouTube ↗** link alongside its local playback

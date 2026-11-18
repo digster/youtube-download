@@ -2,7 +2,7 @@ import shutil
 
 import pytest
 
-from conftest import PID, VID, VID2, playlist, save_video
+from conftest import PID, VID, VID2, playlist, save_video, video
 
 BASE = f"/api/playlists/{PID}"
 
@@ -142,11 +142,28 @@ def test_skip_is_scoped_to_membership_and_survives_refresh(client):
     )
 
 
-def test_skip_rejects_stale_clicks_on_saved_or_removed_videos(client):
+def test_saved_video_selection_controls_future_downloads(client):
     store = client.app.state.store
     media = save_video(store)
     endpoint = f"{BASE}/videos/{VID}/skip"
-    assert client.post(endpoint, json={"skipped": True}).status_code == 409
+    client.post(endpoint, json={"skipped": True}).raise_for_status()
+    assert client.get(BASE).json()["playlist"]["downloaded"] == 1
     store.sync_videos(PID, [])
     assert client.post(endpoint, json={"skipped": True}).status_code == 409
     assert media.read_bytes() == b"local video"
+
+
+def test_bulk_download_selection_covers_all_current_members_only(client):
+    store = client.app.state.store
+    ids = [f"{n:011d}" for n in range(150)]
+    custom = store.create_custom_playlist("Many videos", ids)
+    store.sync_videos(
+        custom, [video(vid, position=i) for i, vid in enumerate(ids[:-1])]
+    )
+    url = f"/api/playlists/{custom}/videos/skip"
+    for skipped in (True, True, False):
+        client.post(url, json={"skipped": skipped}).raise_for_status()
+        rows = store.videos(custom)
+        assert all(v["download_skipped"] == skipped for v in rows if v["in_playlist"])
+        assert not rows[-1]["download_skipped"]
+    assert not store.video(PID, VID)["download_skipped"]

@@ -113,6 +113,12 @@ the playlist running. Receipt recovery still records a transfer that finished
 just before a skip. Progress and completion count saved and skipped entries
 separately, and a restored entry becomes eligible on its next visit.
 
+The library renders a checkbox for each video and a three-state master
+checkbox across all current members. The playlist-level `/videos/skip` POST
+updates every member in one SQLite transaction under the same launch lock.
+Both endpoints can change future download eligibility for saved media.
+Removed rows are retained for browsing with their download controls disabled.
+
 Transfers keep yt-dlp's `.part` and fragment state. `--abort-on-unavailable-fragments`
 prevents incomplete fragmented streams from being accepted as complete.
 `--print-to-file after_move:%(filepath)j` appends a receipt only after yt-dlp's

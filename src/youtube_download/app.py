@@ -432,6 +432,13 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
         manager.backfill_title_files(playlist_id)
         return playlist_detail(playlist_id)
 
+    @app.post("/api/playlists/{playlist_id}/videos/skip")
+    def skip_all_videos(playlist_id: str, update: SkipUpdate):
+        with operations:
+            require_playlist(playlist_id)
+            manager.set_skipped(playlist_id, None, update.skipped)
+        return {"skipped": update.skipped}
+
     @app.post("/api/playlists/{playlist_id}/videos/{video_id}/skip")
     def skip_video(playlist_id: str, video_id: str, update: SkipUpdate):
         with operations:
