@@ -9,8 +9,8 @@ worker per data directory. Runtime files are deliberately separate from
 versioned source.
 
 ```text
-Browser: static/index.html + app.js + style.css
-  ├─ GET /api/playlists, /api/playlists/:id (poll every 2 seconds)
+Browser: static/index.html + polling.js + app.js + style.css
+  ├─ GET /api/playlists, /api/playlists/:id (2 seconds active / 30 seconds idle)
   ├─ POST sync, refresh, download, pause, folder, find
   ├─ POST /api/playlists/custom (local URL list → saved membership)
   ├─ POST /api/playlists/:id/metadata, /metadata/resume, /metadata/cancel
@@ -157,8 +157,8 @@ stop the job with a resumable error. Download status, files, partial transfers,
 playlist order, and membership remain independent of metadata writes.
 
 The custom library heading offers Update/Resume/Retry metadata; a separate panel
-shows counts and Cancel/Update all controls. Two-second library polling displays
-progress and refreshed rows without making the open tab responsible for work.
+shows counts and Cancel/Update all controls. Active-job polling displays progress
+and refreshed rows without making the open tab responsible for work.
 Metadata jobs cover all current membership, independent of pagination/filtering.
 
 ## Folder changes and retained data
@@ -282,12 +282,30 @@ size. Detail views filter/search the full snapshot, then render 100 rows at a
 time. Changing search/filter resets the page; polling clamps pages to the current
 result count. API snapshots remain complete so queue and metadata semantics are
 unchanged.
-Two-second polling stops when the document is hidden and avoids overlapping
-requests. Polls preserve focused card controls; dialogs/search remain outside
-the rerendered list. Download work continues independently of the tab.
-Login polling updates only its controls; it does not replace the client-file
-picker or other settings while someone is using them. An account API 401 opens
-the setup dialog and directs the user to the reconnect button.
+`static/polling.js` loads before `app.js` and owns `AdaptivePoller`, a completion-
+scheduled timeout with one in-flight read per instance. Library snapshots use a
+2-second delay when any displayed playlist has a queued/running media or metadata
+job, otherwise 30 seconds (including paused/failed jobs). Overview checks all
+saved playlists before filtering; detail pages check their own playlist. Failed
+reads use a 30-second delay even if the saved state is active. User actions
+request a fresh snapshot immediately. A forced refresh during an older GET is
+coalesced into one trailing read so a stale response cannot hide a newly queued
+job until the idle timer fires.
+
+Visibility/page-hide events suspend timers; visibility/page-cache restoration
+refreshes immediately and handles duplicate restore events once. An already
+started read can finish while hidden but schedules no further polling. There
+are no hidden-tab polling timers, cross-tab leader election, or server push.
+Changes made in another tab appear on the next idle read or return-to-tab read.
+Polls preserve focused controls; dialogs/search remain outside the rerendered
+list. Workers keep running independently of the tab.
+
+A separate poller checks sign-in every 2 seconds while waiting/exchanging, every
+30 seconds with an idle setup dialog open, and stops when setup is closed and no
+attempt is pending. It never forces a library read. A login revision counter
+discards status responses superseded by start/cancel/client-upload actions.
+Login polling updates only its controls, preserving client-file and cookie
+drafts. An account API 401 opens setup and directs the user to reconnect.
 
 ## Developer workflows
 
@@ -304,6 +322,11 @@ the setup dialog and directs the user to the reconnect button.
   local network binding but no YouTube credentials or external network.
 - There is no frontend bundling step. Static assets are included in the wheel.
 - `node --check src/youtube_download/static/app.js` validates JavaScript syntax.
+- `node --test tests/frontend/polling.test.cjs` exercises the shipped polling/app
+  scripts with a deterministic clock and local API fixtures, including idle/
+  active timing, hidden tabs, request races, failed reads, and sign-in isolation.
+  `tests/test_frontend.py` includes this suite in pytest; Node.js is required for
+  developer tests, with no npm dependency installation or frontend build needed.
 - Browser QA uses a separate data/download root and fake account, checks desktop
   and mobile layouts, queue/pause/search, local playback, archive links, and a
   moved folder. Screenshots are temporary and removed after verification.

@@ -8,11 +8,13 @@ BASE = f"/api/playlists/{PID}"
 
 
 def test_pages_and_security_headers(client):
-    for url in ["/", f"/playlists/{PID}", "/static/app.js"]:
+    for url in ["/", f"/playlists/{PID}", "/static/polling.js", "/static/app.js"]:
         response = client.get(url)
         assert response.status_code == 200
         assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
     assert client.get("/api/status").json()["account"]["provider"] == "youtube-backup"
+    html = client.get("/").text
+    assert html.index("/static/polling.js") < html.index("/static/app.js")
 
 
 def test_start_is_idempotent_and_pause_persists(client):

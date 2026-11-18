@@ -31,10 +31,9 @@ const state = {
   selected: new Set(),
   busy: new Set(),
   signature: "",
-  polling: false,
   login: null,
-  loginPolling: false,
   loginBusy: false,
+  loginRevision: 0,
   cookies: null,
   cookieBusy: false,
   creatingPlaylist: false,
@@ -70,6 +69,44 @@ const needsAttention = (p) =>
   ["error", "completed_with_errors", "paused"].includes(p.state) ||
   (p.items_synced_at && p.state === "completed" && p.downloaded < p.total);
 const apiPath = (id = playlistId) => `/api/playlists/${encodeURIComponent(id)}`;
+
+const libraryPoller = new AdaptivePoller(fetchLibrary, () => {
+  const playlists = playlistId ? [state.playlist] : state.playlists;
+  return playlists.some(
+    (p) =>
+      p && (active(p) || ["queued", "running"].includes(p.metadata?.state)),
+  )
+    ? ACTIVE_POLL_MS
+    : IDLE_POLL_MS;
+});
+const loginPoller = new AdaptivePoller(fetchLogin, () => {
+  if (["waiting", "exchanging"].includes(state.login?.phase))
+    return ACTIVE_POLL_MS;
+  return $("#setup-dialog").open ? IDLE_POLL_MS : null;
+});
+
+const reload = (force = false) => libraryPoller.request(force);
+const refreshLogin = () => loginPoller.request();
+
+// Hidden pages have no polling timers. An already-started read may finish,
+// but returning to the tab fetches fresh state without waiting for an idle tick.
+document.addEventListener("visibilitychange", () => {
+  for (const poller of [libraryPoller, loginPoller]) {
+    if (document.hidden) poller.suspend();
+    else poller.resume();
+  }
+});
+window.addEventListener("pagehide", () => {
+  libraryPoller.suspend();
+  loginPoller.suspend();
+});
+window.addEventListener("pageshow", (event) => {
+  if (event.persisted && !document.hidden) {
+    libraryPoller.resume();
+    loginPoller.resume();
+  }
+});
+$("#setup-dialog").addEventListener("close", () => loginPoller.schedule());
 
 // Custom lists exist only in Shelf; only synced lists have a YouTube source.
 const playlistSourceLink = (playlist, className) =>
@@ -345,9 +382,7 @@ function updateSelection() {
   }
 }
 
-async function reload(force = false) {
-  if (state.polling) return;
-  state.polling = true;
+async function fetchLibrary(force = false) {
   try {
     const data = await api(playlistId ? apiPath() : "/api/playlists");
     const signature = JSON.stringify(data);
@@ -367,8 +402,7 @@ async function reload(force = false) {
       $("#content").innerHTML =
         '<div class="empty"><h3>Library is unavailable.</h3><p>Check that the local server is running, or return to your playlists.</p><a class="button secondary" href="/">Back to playlists</a></div>';
     }
-  } finally {
-    state.polling = false;
+    return false;
   }
 }
 
@@ -574,12 +608,15 @@ function loginError(message) {
   $("#auth-error").hidden = false;
 }
 
-async function refreshLogin() {
-  if (state.loginPolling || state.loginBusy) return;
-  state.loginPolling = true;
+async function fetchLogin() {
+  if (state.loginBusy) return;
+  const revision = state.loginRevision;
   try {
     const previous = state.login?.phase;
     const login = await api("/api/auth/status");
+    // A slow status read must not replace a newer start/cancel/config result,
+    // which also decides whether the sign-in polling timer should keep running.
+    if (revision !== state.loginRevision) return;
     const changed =
       !state.login ||
       ["phase", "message", "configured", "authorization_url"].some(
@@ -587,22 +624,25 @@ async function refreshLogin() {
       );
     state.login = login;
     if (previous !== "connected" && login.phase === "connected") {
-      state.status = await api("/api/status");
+      const status = await api("/api/status");
+      if (revision !== state.loginRevision) return;
+      state.status = status;
       notice("Google connected. Sync your playlists to continue.");
     }
     if (changed) renderLogin();
   } catch (error) {
+    if (revision !== state.loginRevision) return;
     loginError(
       "Could not check sign-in progress. Check that Shelf is still running.",
     );
-  } finally {
-    state.loginPolling = false;
+    return false;
   }
 }
 
 async function loginAction(action) {
   if (state.loginBusy) return;
   state.loginBusy = true;
+  state.loginRevision += 1;
   $("#auth-error").hidden = true;
   renderLogin();
   try {
@@ -615,6 +655,7 @@ async function loginAction(action) {
   } finally {
     state.loginBusy = false;
     renderLogin();
+    loginPoller.schedule();
   }
 }
 
@@ -622,6 +663,7 @@ async function chooseGoogleClient(input) {
   const file = input.files[0];
   if (!file) return;
   state.loginBusy = true;
+  state.loginRevision += 1;
   $("#auth-error").hidden = true;
   renderLogin();
   try {
@@ -641,6 +683,7 @@ async function chooseGoogleClient(input) {
     state.loginBusy = false;
     input.value = "";
     renderLogin();
+    loginPoller.schedule();
   }
 }
 
@@ -927,14 +970,6 @@ async function initialize() {
         "This sign-in link is invalid or expired. Start a new connection here.",
       );
   }
-  setInterval(() => {
-    if (!document.hidden) reload();
-    if (
-      !document.hidden &&
-      ($("#setup-dialog").open ||
-        ["waiting", "exchanging"].includes(state.login?.phase))
-    )
-      refreshLogin();
-  }, 2000);
+  loginPoller.schedule();
 }
 initialize();

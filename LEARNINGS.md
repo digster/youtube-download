@@ -56,3 +56,9 @@
   Test against the installed yt-dlp with a media endpoint that must receive no
   requests. Keep lookup progress separate from media completion and preserve
   known fields when a lookup fails or an optional thumbnail URL is malformed.
+- Schedule polling from request completion, with independent library/login
+  timers. Do not drop a post-mutation refresh just because an older GET is in
+  flight: coalesce it into a trailing read. Otherwise stale idle state can
+  delay progress updates. Likewise, ignore sign-in status reads superseded by
+  a newer start/cancel/config action, and deduplicate visibility/page-cache
+  resume events so returning to a tab does not produce duplicate requests.

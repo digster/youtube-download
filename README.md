@@ -256,6 +256,15 @@ library page. Every video has a **YouTube ↗** link alongside its local playbac
 or archive actions. These links open YouTube in a new tab; unavailable videos
 may still be unavailable there.
 
+The library refreshes every **2 seconds during queued/running downloads or
+metadata updates**, and every **30 seconds while idle**. These reads use local
+library data and do not consume YouTube API quota. Hidden tabs stop polling;
+returning to a tab refreshes immediately. Actions such as starting, pausing, or
+retrying a job also refresh immediately. Slow requests never overlap, and an
+unreachable server is retried at 30-second intervals. Background jobs keep
+running independently of the browser. Each visible tab has its own timer;
+changes made elsewhere appear on the next refresh or when returning to the tab.
+
 ### Create a custom playlist from video URLs
 
 Click **Create playlist**, enter a name, and paste one YouTube video URL per

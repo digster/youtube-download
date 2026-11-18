@@ -184,3 +184,14 @@ continue
 ## 2026-11-17 — Commit authorization reaffirmed
 
 I had asked you to commit for me.
+
+## 2026-11-18 — Reduce continuous API polling
+
+Why are there continuous api hits on the server?
+
+Attached screenshot shows repeated local playlist GET requests returning 200.
+
+Okay, then work on these improvements.
+
+Accepted improvements: frequent polling during active jobs, slower checks when
+idle, and immediate refresh when returning to a tab.
