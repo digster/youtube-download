@@ -429,6 +429,7 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
                         409, "That folder is already assigned to another playlist."
                     )
             store.update_playlist(playlist_id, download_dir=str(directory))
+        manager.backfill_title_files(playlist_id)
         return playlist_detail(playlist_id)
 
     @app.post("/api/playlists/{playlist_id}/videos/{video_id}/skip")

@@ -229,6 +229,72 @@ def test_restart_reconciles_receipt_without_downloading_again(
     )
     manager._download_playlist(PID)
     assert store.video(PID, VID)["local_available"]
+    assert (folder / "A video.txt").read_bytes() == b""
+
+
+def test_startup_adds_missing_title_files_for_existing_and_retained_media(
+    store, settings
+):
+    first = save_video(store)
+    second = save_video(store, VID2)
+    store.sync_videos(PID, [video(VID2, title="Café / jam: live?")])
+    manager = DownloadManager(store, settings, Mock())
+    manager.start()
+    try:
+        marker = second.parent / "Café jam live.txt"
+        wait_for(lambda: marker.exists() and (first.parent / "A video.txt").exists())
+        assert marker.read_bytes() == b""
+        assert (first.parent / "A video.txt").read_bytes() == b""
+        marker.write_text("My notes")
+        manager.backfill_title_files()
+        assert marker.read_text() == "My notes"
+        assert first.read_bytes() == second.read_bytes() == b"local video"
+        assert store.playlist(PID)["state"] == "idle"
+    finally:
+        manager.close()
+
+
+def test_backfill_ignores_missing_media_and_symlinked_video_folder(
+    store, settings, tmp_path
+):
+    first = save_video(store)
+    first.unlink()
+    (first.parent / "unfinished.part").write_bytes(b"partial")
+    second = save_video(store, VID2)
+    moved = tmp_path / "outside"
+    second.parent.rename(moved)
+    second.parent.symlink_to(moved)
+    DownloadManager(store, settings, Mock()).backfill_title_files()
+    assert not list(first.parent.glob("*.txt"))
+    assert not list(moved.glob("*.txt"))
+
+
+def test_backfill_recovers_unknown_custom_title_and_caps_unicode_bytes(store, settings):
+    custom = store.create_custom_playlist("Existing library", [VID])
+    folder = store.playlist_directory(custom) / VID
+    folder.mkdir(parents=True)
+    (folder / "video.mkv").write_bytes(b"saved")
+    (folder / f"{VID}.info.json").write_text(
+        json.dumps({"id": VID, "title": "../" + "🌿" * 100})
+    )
+    store.update_video(custom, VID, status="downloaded", file_path=f"{VID}/video.mkv")
+    manager = DownloadManager(store, settings, Mock())
+    assert manager.backfill_title_files(custom) == 1
+    (marker,) = folder.glob("*.txt")
+    assert marker.name == "🌿" * 62 + ".txt"
+    assert manager.backfill_title_files(custom) == 0
+
+
+def test_title_file_permission_failure_preserves_completed_video(
+    store, settings, monkeypatch
+):
+    path = save_video(store)
+    monkeypatch.setattr(
+        "youtube_download.filenames.os.open", Mock(side_effect=PermissionError())
+    )
+    DownloadManager(store, settings, Mock())._save_file(PID, VID, path)
+    assert store.video(PID, VID)["status"] == "downloaded"
+    assert path.read_bytes() == b"local video"
 
 
 def test_process_launch_failure_does_not_leave_video_downloading(

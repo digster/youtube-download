@@ -129,6 +129,14 @@ sidecar with a matching video ID to enrich title/channel. Missing or malformed
 metadata never invalidates completed media. Receipt reconciliation uses the
 same path, so metadata can also be recovered after interruption.
 
+After recording media, the worker adds an empty title-named text file beside
+it. `filenames.py` shares the playlist filename sanitizer and verifies the
+recorded media relative to an open video directory before exclusive creation.
+At startup and on a folder recheck, `Store.saved_media` supplies recorded paths,
+including retained videos. Backfill uses the library title or matching local
+yt-dlp metadata for an ID placeholder. It performs no network requests and
+missing drives or unwritable title files leave transfer state intact.
+
 Failures such as HTTP 429, network errors, or bot challenges remain retryable
 `failed` states. Explicit private/deleted/unavailable errors trigger archive
 lookup. Known deleted/private entries in an API snapshot are also looked up

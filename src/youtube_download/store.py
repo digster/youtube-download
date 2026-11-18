@@ -4,13 +4,13 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-import re
 import secrets
 import sqlite3
 from urllib.parse import quote
 from uuid import uuid4
 
 from .config import VIDEO_ID, contained_file
+from .filenames import safe_stem
 
 
 def now() -> str:
@@ -115,14 +115,7 @@ class Store:
     def _new_playlist_directory(self, db, title: str) -> str:
         # Only allocate once. Renames and syncs must not detach .part files or
         # downloaded media. Old rows with no override keep their legacy ID folder.
-        name = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', " ", title)
-        name = " ".join(name.split()).strip(" .")[:100]
-        # Filesystem component limits count bytes on Linux; emoji and other
-        # multibyte titles need a byte cap as well as a readable character cap.
-        name = (
-            name.encode("utf-8")[:180].decode("utf-8", errors="ignore").rstrip(" .")
-            or "Playlist"
-        )
+        name = safe_stem(title, max_chars=100, max_bytes=180) or "Playlist"
         for _ in range(20):
             path = self.download_dir.resolve() / f"{name} - {secrets.token_hex(3)}"
             if (
@@ -270,6 +263,17 @@ class Store:
             ).fetchall()
         directory = self.playlist_directory(playlist_id)
         return [self._video_view(row, directory) for row in rows]
+
+    def saved_media(self, playlist_id: str | None = None):
+        # Backfill includes retained media outside current membership. Release
+        # the read transaction before checking potentially slow external drives.
+        query = """SELECT v.playlist_id,v.id,v.title,v.file_path,p.download_dir
+                   FROM videos v JOIN playlists p ON v.playlist_id=p.id
+                   WHERE v.file_path IS NOT NULL"""
+        with self.connect() as db:
+            if playlist_id is None:
+                return db.execute(query).fetchall()
+            return db.execute(query + " AND v.playlist_id=?", (playlist_id,)).fetchall()
 
     @staticmethod
     def _video_view(row, directory: Path) -> dict:

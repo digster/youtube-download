@@ -269,6 +269,7 @@ def test_completed_custom_download_enriches_only_matching_metadata(
     assert saved["local_available"]
     if isinstance(info, dict) and info.get("id") == VID:
         assert saved["title"] == "Actual title" and saved["channel"] == "Actual channel"
+        assert (folder / "Actual title.txt").read_bytes() == b""
     else:
         assert saved["title"] == f"YouTube video · {VID}"
 

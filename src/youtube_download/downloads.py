@@ -14,6 +14,7 @@ import time
 from .config import PLAYLIST_ID, VIDEO_ID, contained_file
 from .cookies import CookieError, CookieSettings
 from .download_settings import DownloadOptions, DownloadSettings
+from .filenames import write_title_file
 from .store import now
 
 logger = logging.getLogger(__name__)
@@ -113,6 +114,26 @@ def error_status(message: str) -> str:
         if any(phrase in message.lower() for phrase in phrases)
         else "failed"
     )
+
+
+def completed_metadata(directory, video_id):
+    # Read only yt-dlp's sidecar for this video. Missing or damaged optional
+    # metadata must never prevent a completed video from entering the library.
+    metadata = {}
+    try:
+        path = contained_file(directory, f"{video_id}/{video_id}.info.json")
+        if path and path.stat().st_size <= 4 * 1024 * 1024:
+            info = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(info, dict) and info.get("id") == video_id:
+                for field, value in (
+                    ("title", info.get("title")),
+                    ("channel", info.get("channel") or info.get("uploader")),
+                ):
+                    if isinstance(value, str) and value.strip():
+                        metadata[field] = value.strip()[:1000]
+    except (OSError, ValueError, RuntimeError):
+        logger.warning("Could not read completed-video metadata for %s", video_id)
+    return metadata
 
 
 class DownloadManager:
@@ -229,6 +250,7 @@ class DownloadManager:
         # before the recovered queue can write to the same .part files.
         if self.stop.wait(0.5):
             return
+        self.backfill_title_files()
         while not self.stop.is_set():
             with self.lock:
                 playlist_id = self.store.next_job()
@@ -267,40 +289,46 @@ class DownloadManager:
                     ):
                         self.store.update_playlist(playlist_id, state="queued")
 
+    def backfill_title_files(self, playlist_id=None):
+        created = 0
+        for video in self.store.saved_media(playlist_id):
+            if self.stop.is_set():
+                break
+            directory = (
+                Path(video["download_dir"])
+                if video["download_dir"]
+                else self.store.download_dir / video["playlist_id"]
+            )
+            title, video_id = video["title"], video["id"]
+            if title in {video_id, f"YouTube video · {video_id}", "Untitled video"}:
+                title = completed_metadata(directory, video_id).get("title") or title
+            created += write_title_file(directory, video_id, video["file_path"], title)
+        if created:
+            logger.info("Added searchable title files for %d saved videos", created)
+        return created
+
     def _save_file(self, playlist_id, video_id, path):
-        metadata = {}
-        if self.store.playlist(playlist_id)["source"] == "custom":
-            # Custom lists are created offline from IDs. Enrich them using the
-            # sidecar yt-dlp already writes; no OAuth or extra metadata requests.
-            # A damaged sidecar must never turn a completed download into a failure.
-            try:
-                info_path = contained_file(
-                    self.store.playlist_directory(playlist_id),
-                    f"{video_id}/{video_id}.info.json",
-                )
-                if info_path and info_path.stat().st_size <= 4 * 1024 * 1024:
-                    info = json.loads(info_path.read_text(encoding="utf-8"))
-                    if isinstance(info, dict) and info.get("id") == video_id:
-                        for field, value in (
-                            ("title", info.get("title")),
-                            ("channel", info.get("channel") or info.get("uploader")),
-                        ):
-                            if isinstance(value, str) and value.strip():
-                                metadata[field] = value.strip()[:1000]
-            except (OSError, ValueError):
-                logger.warning(
-                    "Could not read completed-video metadata for %s", video_id
-                )
+        directory = self.store.playlist_directory(playlist_id)
+        relative = str(path.relative_to(directory))
+        metadata = (
+            completed_metadata(directory, video_id)
+            if self.store.playlist(playlist_id)["source"] == "custom"
+            else {}
+        )
         self.store.update_video(
             playlist_id,
             video_id,
             status="downloaded",
             error="",
-            file_path=str(path.relative_to(self.store.playlist_directory(playlist_id))),
+            file_path=relative,
             size=path.stat().st_size,
             downloaded_at=now(),
             **metadata,
         )
+        title = (
+            metadata.get("title") or self.store.video(playlist_id, video_id)["title"]
+        )
+        write_title_file(directory, video_id, relative, title)
 
     def _download_playlist(self, playlist_id):
         logger.info("Downloading playlist %s", playlist_id)

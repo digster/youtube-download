@@ -323,6 +323,14 @@ changes keep that location so completed and partial files remain usable.
 Existing playlist folders and manually selected locations stay unchanged.
 Older playlists can therefore still use their original playlist-ID folder.
 
+Search for a video's title in Finder or your file manager to find its ID
+folder. Shelf creates an empty `<video title>.txt` beside each completed
+download. It replaces unsafe filename characters with spaces and shortens
+long titles. At startup Shelf adds missing title files for existing downloads
+on connected drives. After reconnecting or moving a drive, **Change folder →
+Save & recheck files** also adds them. If the name is already in use, Shelf
+preserves the existing file.
+
 ### Move a playlist to another folder or drive
 
 Pause the playlist and wait for its download to stop. Move its entire folder,
@@ -337,6 +345,7 @@ Choose the folder containing the video ID folders, not its parent. For example:
 └── dQw4w9WgXcQ/
     ├── dQw4w9WgXcQ.mp4
     ├── dQw4w9WgXcQ.info.json
+    ├── Rick Astley - Never Gonna Give You Up.txt
     ├── .completed.jsonl
     └── .download.lock
 ```

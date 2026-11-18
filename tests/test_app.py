@@ -59,6 +59,7 @@ def test_change_folder_rechecks_files_and_serves_moved_video(client, tmp_path):
     assert response.status_code == 200
     assert response.json()["playlist"]["downloaded"] == 1
     assert client.get(f"{BASE}/videos/{VID}/file").content == b"local video"
+    assert (new / VID / "A video.txt").read_bytes() == b""
 
 
 @pytest.mark.parametrize(
