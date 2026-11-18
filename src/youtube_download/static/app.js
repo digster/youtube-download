@@ -48,6 +48,7 @@ const labels = {
   completed_with_errors: "Needs attention",
   error: "Needs attention",
   pending: "Ready to download",
+  skipped: "Skipped",
   downloading: "Downloading",
   downloaded: "On disk",
   missing: "File missing",
@@ -63,11 +64,16 @@ const bytes = (value) => {
   return `${(value / 1024 ** i).toFixed(i > 1 ? 1 : 0)} ${units[i]}`;
 };
 const active = (p) => ["queued", "running"].includes(p.state);
+const processedVideos = (p) => p.downloaded + (p.skipped || 0);
+const videoNeedsAttention = (v) =>
+  !v.local_available &&
+  !v.download_skipped &&
+  ["failed", "unavailable", "missing"].includes(v.status);
 const needsAttention = (p) =>
   p.failed ||
   p.unavailable ||
   ["error", "completed_with_errors", "paused"].includes(p.state) ||
-  (p.items_synced_at && p.state === "completed" && p.downloaded < p.total);
+  (p.items_synced_at && p.state === "completed" && processedVideos(p) < p.total);
 const apiPath = (id = playlistId) => `/api/playlists/${encodeURIComponent(id)}`;
 
 const libraryPoller = new AdaptivePoller(fetchLibrary, () => {
@@ -225,7 +231,7 @@ function downloadButton(p, small = false) {
     ? "Ⅱ Pause"
     : p.state === "paused"
       ? "↓ Resume"
-      : p.state === "completed" && p.downloaded === p.total
+      : p.state === "completed" && processedVideos(p) === p.total
         ? "↻ Check downloads"
         : p.state === "idle"
           ? "↓ Download"
@@ -238,6 +244,7 @@ function renderFilters() {
     ? [
         ["all", "All videos"],
         ["downloaded", "On disk"],
+        ["skipped", "Skipped"],
         ["attention", "Needs attention"],
       ]
     : [
@@ -265,7 +272,7 @@ function visiblePlaylists() {
       return false;
     if (
       state.filter === "complete" &&
-      (!p.items_synced_at || p.downloaded !== p.total)
+      (!p.items_synced_at || processedVideos(p) !== p.total)
     )
       return false;
     return `${p.title} ${p.channel}`
@@ -301,14 +308,14 @@ function renderPlaylistCard(card, p) {
   );
   setMarkup(
     card.querySelector(".status-line"),
-    `${badge(p.state)}<span>${p.downloaded} of ${p.total} saved</span>`,
+    `${badge(p.state)}<span>${p.downloaded} of ${p.total} saved${p.skipped ? ` · ${p.skipped} skipped` : ""}</span>`,
   );
   const progress = card.querySelector("progress");
   const percent = p.total
     ? Math.min(
         100,
         Math.round(
-          (100 * (p.downloaded + (p.current_video ? p.progress / 100 : 0))) /
+          (100 * (processedVideos(p) + (p.current_video ? p.progress / 100 : 0))) /
             p.total,
         ),
       )
@@ -443,9 +450,14 @@ function renderVideoRow(row, v) {
     if (message) setText(disclosure.querySelector("p"), message);
     else if (disclosure.open) disclosure.open = false;
   });
+  const status = v.local_available ? "downloaded" : v.download_skipped ? "skipped" : v.status;
+  const id = escapeHTML(v.id);
+  const skip = v.in_playlist && (!v.local_available || v.download_skipped)
+    ? `<button class="button quiet small" data-action="${v.download_skipped ? "include" : "skip"}" data-video="${id}" data-focus="skip-${id}">${v.download_skipped ? "Include again" : "Skip download"}</button>`
+    : "";
   setMarkup(
     row.querySelector(".video-actions"),
-    `${badge(v.local_available ? "downloaded" : v.status)}${v.local_available ? `<button class="button secondary small" data-action="play" data-video="${escapeHTML(v.id)}">▷ Play</button>` : ["unavailable", "failed"].includes(v.status) ? `<button class="button secondary small" data-action="find" data-video="${escapeHTML(v.id)}">${v.recovery ? "Archive links ↗" : "Find archives ↗"}</button>` : ""}<a class="button quiet small" target="_blank" rel="noopener noreferrer" href="https://www.youtube.com/watch?v=${encodeURIComponent(v.id)}" aria-label="Open ${escapeHTML(v.title)} on YouTube (new tab)">YouTube ↗</a>`,
+    `${badge(status)}${v.local_available ? `<button class="button secondary small" data-action="play" data-video="${id}">▷ Play</button>` : ["unavailable", "failed"].includes(v.status) ? `<button class="button secondary small" data-action="find" data-video="${id}">${v.recovery ? "Archive links ↗" : "Find archives ↗"}</button>` : ""}${skip}<a class="button quiet small" target="_blank" rel="noopener noreferrer" href="https://www.youtube.com/watch?v=${encodeURIComponent(v.id)}" aria-label="Open ${escapeHTML(v.title)} on YouTube (new tab)">YouTube ↗</a>`,
   );
 }
 
@@ -472,20 +484,13 @@ function renderDetail() {
   stats([
     ["Playlist videos", p.total],
     ["Videos on disk", p.local_count],
-    [
-      "Needs attention",
-      state.videos.filter(
-        (v) =>
-          !v.local_available &&
-          ["failed", "unavailable", "missing"].includes(v.status),
-      ).length,
-    ],
+    ["Needs attention", state.videos.filter(videoNeedsAttention).length],
     ["Saved locally", bytes(p.bytes)],
   ]);
   setText($("#collection-title"), "Playlist library");
   setText(
     $("#collection-description"),
-    `${labels[p.state] || p.state}${p.current_video ? ` · Current video ${Math.round(p.progress)}%` : ""}`,
+    `${labels[p.state] || p.state}${p.current_video ? ` · Current video ${Math.round(p.progress)}%` : ""}${p.skipped ? ` · ${p.skipped} skipped` : ""}`,
   );
   const shown = state.videos.filter(
     (v) =>
@@ -493,10 +498,9 @@ function renderDetail() {
         .toLowerCase()
         .includes(state.search.toLowerCase()) &&
       (state.filter === "all" ||
-        (state.filter === "downloaded"
-          ? v.local_available
-          : ["failed", "unavailable", "missing"].includes(v.status) &&
-            !v.local_available)),
+        (state.filter === "downloaded" && v.local_available) ||
+        (state.filter === "skipped" && v.download_skipped && !v.local_available) ||
+        (state.filter === "attention" && videoNeedsAttention(v))),
   );
   setMarkup(
     $("#library-info"),
@@ -959,6 +963,21 @@ document.addEventListener("click", async (event) => {
   }
   if (action === "find") {
     await findArchives(button.dataset.video);
+    return;
+  }
+  if (action === "skip" || action === "include") {
+    button.disabled = true;
+    try {
+      await api(`${apiPath()}/videos/${encodeURIComponent(button.dataset.video)}/skip`, "POST", {
+        skipped: action === "skip",
+      });
+      notice(action === "skip" ? "Video skipped for this playlist." : "Video included in playlist downloads again.");
+    } catch (error) {
+      notice(error.message, true);
+    } finally {
+      await reload(true);
+      button.disabled = false;
+    }
     return;
   }
   button.disabled = true;

@@ -131,6 +131,86 @@ def test_unavailable_video_does_not_block_later_video(store, settings, monkeypat
     assert store.playlist(PID)["state"] == "completed_with_errors"
 
 
+def test_skip_active_and_upcoming_videos_then_include_again(
+    store, settings, monkeypatch
+):
+    third = "01234567890"
+    store.sync_videos(PID, [video(), video(VID2, position=1), video(third, position=2)])
+    started = []
+    script = """import json, pathlib, sys, time
+folder = pathlib.Path(sys.argv[1])
+partial = folder / "video.part"
+if sys.argv[2] == "wait":
+    partial.write_bytes(b"partial")
+    time.sleep(30)
+media = folder / "video.mp4"
+media.write_bytes(b"complete")
+(folder / ".completed.jsonl").write_text(json.dumps(str(media)))
+"""
+
+    def command(settings, playlist_id, video_id, directory, options):
+        folder = directory / video_id
+        folder.mkdir(exist_ok=True, parents=True)
+        started.append(video_id)
+        return [
+            sys.executable,
+            "-c",
+            script,
+            str(folder),
+            "wait" if len(started) == 1 else "finish",
+        ]
+
+    monkeypatch.setattr("youtube_download.downloads.build_command", command)
+    manager = DownloadManager(store, settings, Mock())
+    partial = store.playlist_directory(PID) / VID / "video.part"
+    manager.start()
+    try:
+        manager.enqueue(PID)
+        wait_for(partial.exists)
+        manager.set_skipped(PID, VID2, True)
+        manager.set_skipped(PID, VID, True)
+        wait_for(
+            lambda: (
+                store.playlist(PID)["state"] == "completed"
+                and manager.active_playlist is None
+            )
+        )
+        assert partial.read_bytes() == b"partial"
+        assert started == [VID, third]
+        assert store.playlists()[0]["skipped"] == 2
+        manager.enqueue(PID)
+        wait_for(
+            lambda: (
+                store.playlist(PID)["state"] == "completed"
+                and manager.active_playlist is None
+            )
+        )
+        assert started == [VID, third]
+        manager.set_skipped(PID, VID, False)
+        manager.enqueue(PID)
+        wait_for(lambda: store.playlist(PID)["state"] == "completed")
+        assert started == [VID, third, VID]
+        assert store.playlists()[0]["downloaded"] == 2
+        manager.finder.lookup.assert_not_called()
+    finally:
+        manager.close()
+
+
+def test_skipping_only_unavailable_video_completes_without_archive_lookup(
+    store, settings
+):
+    store.sync_videos(PID, [video(availability="unavailable")])
+    manager = DownloadManager(store, settings, Mock())
+    manager.set_skipped(PID, VID, True)
+    store.recover_jobs()
+    store.update_playlist(PID, state="running")
+    manager._download_playlist(PID)
+    manager.finder.lookup.assert_not_called()
+    assert store.playlist(PID)["state"] == "completed"
+    assert store.playlists()[0]["downloaded"] == 0
+    assert store.playlists()[0]["skipped"] == 1
+
+
 def test_restart_reconciles_receipt_without_downloading_again(
     store, settings, monkeypatch
 ):

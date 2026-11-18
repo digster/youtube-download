@@ -105,6 +105,14 @@ enqueueing a paused/completed/error job retries unfinished work. On startup,
 shutdown, active work becomes queued. A user pause is never overwritten by
 worker completion or shutdown.
 
+Each membership has a durable `download_skipped` flag, independent of its
+transfer status and metadata job. The video `/skip` POST sets an explicit
+boolean. The downloader checks it between videos and under the subprocess
+launch lock. Skipping the active transfer signals its process group and keeps
+the playlist running. Receipt recovery still records a transfer that finished
+just before a skip. Progress and completion count saved and skipped entries
+separately, and a restored entry becomes eligible on its next visit.
+
 Transfers keep yt-dlp's `.part` and fragment state. `--abort-on-unavailable-fragments`
 prevents incomplete fragmented streams from being accepted as complete.
 `--print-to-file after_move:%(filepath)j` appends a receipt only after yt-dlp's

@@ -2,6 +2,18 @@ import shutil
 
 from conftest import PID, VID, VID2, playlist, save_video, video
 from youtube_download.config import contained_file
+from youtube_download.store import Store
+
+
+def test_existing_memberships_default_to_included_after_upgrade(store):
+    with store.connect() as db:
+        db.execute("ALTER TABLE videos DROP COLUMN download_skipped")
+    reopened = Store(store.path, store.download_dir)
+    assert not reopened.download_skipped(PID, VID)
+    reopened.update_video(PID, VID, download_skipped=True)
+    reopened.sync_videos(PID, [video(VID2)])
+    reopened.sync_videos(PID, [video(), video(VID2)])
+    assert Store(store.path, store.download_dir).video(PID, VID)["download_skipped"]
 
 
 def test_sync_preserves_downloads_and_removed_videos(store):

@@ -49,6 +49,11 @@ async function testLibraryRendering(page) {
       return route.fulfill({ json: { playlists } });
     if (path === "/api/playlists/active")
       return route.fulfill({ json: { playlist, videos } });
+    if (path === "/api/playlists/active/videos/video-1/skip" && route.request().method() === "POST") {
+      videos[0].download_skipped = route.request().postDataJSON().skipped;
+      playlist.skipped = Number(videos[0].download_skipped);
+      return route.fulfill({ json: { skipped: videos[0].download_skipped } });
+    }
     if (
       path === "/api/playlists/active/pause" &&
       route.request().method() === "POST"
@@ -269,5 +274,18 @@ async function testLibraryRendering(page) {
     (await page.locator(".video-row").count()) === 2,
     "Polling failed to clamp the video page",
   );
-  return "Playlist and video updates preserve thumbnails, selection, focus and open details.";
+  await page.getByRole("button", { name: "Skip download" }).first().click();
+  await page.getByRole("button", { name: "Include again" }).waitFor();
+  await page.reload();
+  await page.getByRole("button", { name: "Skipped", exact: true }).click();
+  check(await page.locator(".video-row").count() === 1, "Skipped filter included other videos");
+  await page.getByRole("button", { name: "Needs attention", exact: true }).click();
+  await page.getByRole("heading", { name: "video-2" }).waitFor();
+  check(await page.locator(".video-row").count() === 1, "Skipped failure still needs attention");
+  await page.getByRole("button", { name: "Skipped", exact: true }).click();
+  await page.getByRole("button", { name: "Include again" }).click();
+  await page.getByText("No videos in this view.").waitFor();
+  await page.getByRole("button", { name: "All videos" }).click();
+  check(await page.getByRole("button", { name: "Skip download" }).count() === 2, "Include did not restore the video");
+  return "Playlist rendering, skip and include controls passed.";
 }

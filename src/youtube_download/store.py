@@ -60,6 +60,7 @@ class Store:
                 )
             video_columns = {row[1] for row in db.execute("PRAGMA table_info(videos)")}
             for name, definition in {
+                "download_skipped": "INTEGER NOT NULL DEFAULT 0",
                 "metadata_status": "TEXT NOT NULL DEFAULT 'pending'",
                 "metadata_error": "TEXT DEFAULT ''",
                 "metadata_updated_at": "TEXT",
@@ -234,6 +235,7 @@ class Store:
     def playlist_summary(self, row: dict, videos: list[dict] | None = None) -> dict:
         videos = self.videos(row["id"]) if videos is None else videos
         current = [v for v in videos if v["in_playlist"]]
+        remaining = [v for v in current if not v["local_available"]]
         return {
             **dict(row),
             "youtube_url": f"https://www.youtube.com/playlist?list={quote(row['id'], safe='')}"
@@ -243,11 +245,14 @@ class Store:
             "downloaded": sum(v["local_available"] for v in current),
             "local_count": sum(v["local_available"] for v in videos),
             "total": len(current) if row["items_synced_at"] else row["item_count"],
+            "skipped": sum(v["download_skipped"] for v in remaining),
             "unavailable": sum(
-                v["status"] == "unavailable" and not v["local_available"]
-                for v in current
+                v["status"] == "unavailable" and not v["download_skipped"]
+                for v in remaining
             ),
-            "failed": sum(v["status"] == "failed" for v in current),
+            "failed": sum(
+                v["status"] == "failed" and not v["download_skipped"] for v in remaining
+            ),
             "bytes": sum(v["size"] for v in videos if v["local_available"]),
             "metadata": {
                 **self.metadata_job(row["id"]),
@@ -269,6 +274,7 @@ class Store:
     @staticmethod
     def _video_view(row, directory: Path) -> dict:
         item = dict(row)
+        item["download_skipped"] = bool(item["download_skipped"])
         item["youtube_url"] = (
             f"https://www.youtube.com/watch?v={quote(item['id'], safe='')}"
         )
@@ -290,8 +296,19 @@ class Store:
             self._video_view(row, self.playlist_directory(playlist_id)) if row else None
         )
 
+    def download_skipped(self, playlist_id: str, video_id: str) -> bool:
+        # The worker needs the live preference between transfers and at launch.
+        # Avoid resolving paths and loading recovery metadata for these checks.
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT download_skipped FROM videos WHERE playlist_id=? AND id=?",
+                (playlist_id, video_id),
+            ).fetchone()
+        return bool(row["download_skipped"])
+
     def update_video(self, playlist_id: str, video_id: str, **fields):
         allowed = {
+            "download_skipped",
             "title",
             "channel",
             "thumbnail",

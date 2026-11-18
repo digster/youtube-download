@@ -2,7 +2,7 @@ import shutil
 
 import pytest
 
-from conftest import PID, VID, playlist, save_video
+from conftest import PID, VID, VID2, playlist, save_video
 
 BASE = f"/api/playlists/{PID}"
 
@@ -117,3 +117,35 @@ def test_expired_oauth_gives_reconnect_instructions(client, monkeypatch):
     response = client.post("/api/sync")
     assert response.status_code == 401
     assert "Reconnect" in response.json()["detail"]
+
+
+def test_skip_is_scoped_to_membership_and_survives_refresh(client):
+    store = client.app.state.store
+    other = store.create_custom_playlist("Other list", [VID2])
+    endpoint = f"{BASE}/videos/{VID2}/skip"
+    for _ in range(2):
+        assert client.post(endpoint, json={"skipped": True}).is_success
+    detail = client.post(f"{BASE}/refresh").json()
+    assert detail["playlist"]["skipped"] == 1
+    assert detail["playlist"]["unavailable"] == 0
+    assert detail["videos"][1]["download_skipped"]
+    assert not store.video(other, VID2)["download_skipped"]
+    client.post(endpoint, json={"skipped": False}).raise_for_status()
+    assert client.get(BASE).json()["playlist"]["unavailable"] == 1
+    assert client.post(endpoint, json={}).status_code == 422
+    assert (
+        client.post(
+            endpoint, json={"skipped": True}, headers={"X-Local-App": ""}
+        ).status_code
+        == 403
+    )
+
+
+def test_skip_rejects_stale_clicks_on_saved_or_removed_videos(client):
+    store = client.app.state.store
+    media = save_video(store)
+    endpoint = f"{BASE}/videos/{VID}/skip"
+    assert client.post(endpoint, json={"skipped": True}).status_code == 409
+    store.sync_videos(PID, [])
+    assert client.post(endpoint, json={"skipped": True}).status_code == 409
+    assert media.read_bytes() == b"local video"

@@ -125,6 +125,7 @@ class DownloadManager:
         self.lock = threading.RLock()
         self.thread = None
         self.process = None
+        self.process_skipped = False
         self.active_playlist = None
 
     def start(self):
@@ -155,6 +156,48 @@ class DownloadManager:
             )
             if self.active_playlist == playlist_id:
                 self._terminate()
+
+    def set_skipped(self, playlist_id: str, video_id: str, skipped: bool):
+        # The flag belongs to one playlist membership. Serializing with launch
+        # guarantees a skip either prevents the subprocess or stops that video.
+        with self.lock:
+            video = self.store.video(playlist_id, video_id)
+            if not video or not video["in_playlist"]:
+                raise ValueError("This video is no longer in the playlist.")
+            if video["download_skipped"] == skipped:
+                return
+            if skipped and video["local_available"]:
+                raise ValueError("This video has already been downloaded.")
+            self.store.update_video(playlist_id, video_id, download_skipped=skipped)
+            playlist = self.store.playlist(playlist_id)
+            if (
+                skipped
+                and self.active_playlist == playlist_id
+                and playlist["current_video"] == video_id
+            ):
+                self.process_skipped = True
+                self._terminate()
+            if playlist["state"] in {"completed", "completed_with_errors"}:
+                self._finish_playlist(playlist_id)
+
+    def _finish_playlist(self, playlist_id):
+        remaining = [
+            v
+            for v in self.store.videos(playlist_id)
+            if v["in_playlist"]
+            and not v["local_available"]
+            and not v["download_skipped"]
+        ]
+        # Re-including a pending item after the worker passed it makes the
+        # playlist ready for another run. Only actual failures need attention.
+        state = "completed"
+        if remaining:
+            state = (
+                "completed_with_errors"
+                if any(v["status"] != "pending" for v in remaining)
+                else "idle"
+            )
+        self.store.update_playlist(playlist_id, state=state)
 
     def close(self):
         self.stop.set()
@@ -275,6 +318,10 @@ class DownloadManager:
             if path:
                 self._save_file(playlist_id, video["id"], path)
                 continue
+            # The membership snapshot may predate a click during an earlier
+            # transfer. Recover any completed receipt before applying the skip.
+            if self.store.download_skipped(playlist_id, video["id"]):
+                continue
             if video["availability"] == "unavailable":
                 self.store.update_video(playlist_id, video["id"], status="unavailable")
                 self.finder.lookup(playlist_id, video["id"])
@@ -282,12 +329,7 @@ class DownloadManager:
             self._download_video(playlist_id, video["id"])
         with self.lock:
             if not self._interrupted(playlist_id):
-                videos = [v for v in self.store.videos(playlist_id) if v["in_playlist"]]
-                incomplete = any(not v["local_available"] for v in videos)
-                self.store.update_playlist(
-                    playlist_id,
-                    state="completed_with_errors" if incomplete else "completed",
-                )
+                self._finish_playlist(playlist_id)
 
     def _download_video(self, playlist_id, video_id):
         try:
@@ -295,7 +337,9 @@ class DownloadManager:
                 self._download_video_with_settings(playlist_id, video_id, settings)
         except CookieError as exc:
             with self.lock:
-                if not self._interrupted(playlist_id):
+                if not self._interrupted(
+                    playlist_id
+                ) and not self.store.download_skipped(playlist_id, video_id):
                     self.store.update_video(
                         playlist_id, video_id, status="failed", error=str(exc)
                     )
@@ -303,17 +347,23 @@ class DownloadManager:
 
     def _download_video_with_settings(self, playlist_id, video_id, settings):
         directory = self.store.playlist_directory(playlist_id)
-        command = build_command(
-            settings, playlist_id, video_id, directory,
-            self.download_settings.snapshot(),
-        )
         with self.lock:
-            if self._interrupted(playlist_id):
+            if self._interrupted(playlist_id) or self.store.download_skipped(
+                playlist_id, video_id
+            ):
                 return
+            command = build_command(
+                settings,
+                playlist_id,
+                video_id,
+                directory,
+                self.download_settings.snapshot(),
+            )
             self.store.update_video(
                 playlist_id, video_id, status="downloading", error=""
             )
             self.store.update_playlist(playlist_id, current_video=video_id, progress=0)
+            self.process_skipped = False
             self.process = subprocess.Popen(
                 command,
                 stdout=subprocess.PIPE,
@@ -357,10 +407,12 @@ class DownloadManager:
             with self.lock:
                 self._terminate()
                 self.process = None
+                skipped = self.process_skipped
+                self.store.update_playlist(playlist_id, current_video=None, progress=0)
         path = completed_file(self.settings, playlist_id, video_id, directory)
         if path:
             self._save_file(playlist_id, video_id, path)
-        elif self._interrupted(playlist_id):
+        elif skipped or self._interrupted(playlist_id):
             self.store.update_video(playlist_id, video_id, status="pending")
         else:
             error = (

@@ -211,3 +211,12 @@ Why are there no thumbnails for the videos in a list?
 Attached screenshot shows two video rows with play-icon placeholders.
 
 continue
+
+## 2026-11-18 — Skip individual downloads and search by video title
+
+- add a skip option to allow skipping individual videos from download in a list.
+- Also it's difficult to find the video by name on disk since the video's name is not visible. Add an empty text file with the video's name so that we can at least search(or suggest a better alternative).
+
+Attached screenshot shows video-ID folders containing media and metadata named by ID.
+
+Also do the commits for me.

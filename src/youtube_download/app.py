@@ -36,6 +36,10 @@ class FolderUpdate(BaseModel):
     directory: str = Field(min_length=1, max_length=4096)
 
 
+class SkipUpdate(BaseModel):
+    skipped: bool = Field(strict=True)
+
+
 class CookieUpdate(BaseModel):
     mode: str = Field(max_length=20)
     browser: str = Field(default="", max_length=30)
@@ -426,6 +430,16 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
                     )
             store.update_playlist(playlist_id, download_dir=str(directory))
         return playlist_detail(playlist_id)
+
+    @app.post("/api/playlists/{playlist_id}/videos/{video_id}/skip")
+    def skip_video(playlist_id: str, video_id: str, update: SkipUpdate):
+        with operations:
+            require_video(playlist_id, video_id)
+            try:
+                manager.set_skipped(playlist_id, video_id, update.skipped)
+            except ValueError as exc:
+                raise HTTPException(409, str(exc)) from exc
+        return {"skipped": update.skipped}
 
     @app.post("/api/playlists/{playlist_id}/videos/{video_id}/find")
     def find(playlist_id: str, video_id: str):
