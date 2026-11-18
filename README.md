@@ -14,6 +14,8 @@ required. Supported platforms: macOS and Linux.
   retries from **Download settings**, with saved preferences and a defaults reset.
 - List your account's owned playlists, including private playlists and Liked videos.
 - Create custom local playlists by pasting YouTube video URLs, without Google login.
+- Update custom playlist titles, channels, and thumbnails before downloading,
+  with progress, cancellation, and resumable metadata lookups.
 - Open the original YouTube playlist from its card or library page, and the
   original video from every video row, including downloaded or unavailable videos.
 - Give new playlists readable folders such as `Weekend watchlist - a1b2c3`.
@@ -271,9 +273,27 @@ Creation opens the new local library; click **Download** when ready. Custom
 playlists use the same queue, pause/resume, folder changes, and archive lookup
 as synced playlists. They require no Google account connection and are not
 published to YouTube. Private videos still need suitable download cookies.
-Video titles initially show their IDs and are updated from yt-dlp metadata
-after a successful download. Custom playlists have video links but no original
-YouTube playlist link or Google refresh action.
+Video titles initially show their IDs. Click **Update metadata** on the custom
+playlist page to fetch titles, channels, and thumbnails from the saved video
+URLs without downloading media. The lookup uses your current cookie source
+from **Account & setup** and needs no Google API connection. Successful downloads
+also enrich video details from yt-dlp metadata. Custom playlists have video links
+but no original YouTube playlist link or Google refresh action.
+
+Metadata updates cover the entire list, including videos on other pages or hidden
+by a filter. Progress shows how many were checked, updated, or failed. You can
+leave the page while the update runs, or click **Cancel update** and later
+**Resume metadata** to continue unfinished lookups. Progress is saved after each
+video, and active work resumes after a server restart. A cancelled job stays
+cancelled until you resume it.
+
+Failed lookups keep existing titles and local files; their rows show **Metadata
+unavailable** with details. **Retry metadata** retries only unfinished/failed
+lookups. **Update all metadata** starts another pass over every video; after a
+fully successful pass, **Update metadata** does the same. Fix expired cookies in
+setup before retrying private videos. Lookups run sequentially with a 90-second
+limit per video, so large lists can take time. Download quality, subtitles, and
+output preferences do not cause files to be created during a metadata update.
 
 ### Default download folders
 

@@ -43,6 +43,11 @@ class Store:
                     PRIMARY KEY (playlist_id, id)
                 );
                 CREATE INDEX IF NOT EXISTS video_status ON videos(playlist_id, status);
+                CREATE TABLE IF NOT EXISTS metadata_jobs (
+                    playlist_id TEXT PRIMARY KEY REFERENCES playlists(id),
+                    state TEXT NOT NULL, queued_at TEXT, current_video TEXT,
+                    error TEXT DEFAULT '', finished_at TEXT
+                );
             """)
             columns = {row[1] for row in db.execute("PRAGMA table_info(playlists)")}
             if "download_dir" not in columns:
@@ -53,6 +58,14 @@ class Store:
                 db.execute(
                     "ALTER TABLE playlists ADD COLUMN source TEXT NOT NULL DEFAULT 'youtube'"
                 )
+            video_columns = {row[1] for row in db.execute("PRAGMA table_info(videos)")}
+            for name, definition in {
+                "metadata_status": "TEXT NOT NULL DEFAULT 'pending'",
+                "metadata_error": "TEXT DEFAULT ''",
+                "metadata_updated_at": "TEXT",
+            }.items():
+                if name not in video_columns:
+                    db.execute(f"ALTER TABLE videos ADD COLUMN {name} {definition}")
 
     def playlist_directory(self, playlist_id: str) -> Path:
         playlist = self.playlist(playlist_id)
@@ -236,6 +249,12 @@ class Store:
             ),
             "failed": sum(v["status"] == "failed" for v in current),
             "bytes": sum(v["size"] for v in videos if v["local_available"]),
+            "metadata": {
+                **self.metadata_job(row["id"]),
+                "total": len(current),
+                "updated": sum(v["metadata_status"] == "updated" for v in current),
+                "failed": sum(v["metadata_status"] == "failed" for v in current),
+            },
         }
 
     def videos(self, playlist_id: str) -> list[dict]:
@@ -283,6 +302,9 @@ class Store:
             "downloaded_at",
             "recovery",
             "recovery_checked_at",
+            "metadata_status",
+            "metadata_error",
+            "metadata_updated_at",
         }
         if not fields or not fields.keys() <= allowed:
             raise ValueError("Invalid video update")
@@ -315,6 +337,82 @@ class Store:
                 "UPDATE playlists SET state='queued', current_video=NULL, progress=0 WHERE state='running'"
             )
             db.execute("UPDATE videos SET status='pending' WHERE status='downloading'")
+
+    def metadata_job(self, playlist_id: str) -> dict:
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT * FROM metadata_jobs WHERE playlist_id=?", (playlist_id,)
+            ).fetchone()
+        return (
+            dict(row) if row else {"state": "idle", "error": "", "current_video": None}
+        )
+
+    def queue_metadata(self, playlist_id: str, resume: bool = False):
+        # The metadata ledger is independent of download status. Restarting a
+        # lookup clears only its progress/errors, never known titles or media.
+        with self.connect() as db:
+            db.execute(
+                "UPDATE videos SET metadata_status='pending', metadata_error='' "
+                "WHERE playlist_id=? AND in_playlist=1 "
+                + ("AND metadata_status!='updated'" if resume else ""),
+                (playlist_id,),
+            )
+            db.execute(
+                """INSERT INTO metadata_jobs(playlist_id,state,queued_at)
+                VALUES(?,'queued',?) ON CONFLICT(playlist_id) DO UPDATE SET
+                state='queued',queued_at=excluded.queued_at,current_video=NULL,
+                error='',finished_at=NULL""",
+                (playlist_id, now()),
+            )
+
+    def update_metadata_job(self, playlist_id: str, **fields):
+        if not fields or not fields.keys() <= {
+            "state",
+            "error",
+            "current_video",
+            "finished_at",
+        }:
+            raise ValueError("Invalid metadata job update")
+        with self.connect() as db:
+            db.execute(
+                f"UPDATE metadata_jobs SET {','.join(f'{key}=?' for key in fields)} WHERE playlist_id=?",
+                (*fields.values(), playlist_id),
+            )
+
+    def recover_metadata_jobs(self):
+        with self.connect() as db:
+            db.execute(
+                "UPDATE metadata_jobs SET state='queued',current_video=NULL WHERE state='running'"
+            )
+
+    def next_metadata_job(self) -> str | None:
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT playlist_id FROM metadata_jobs WHERE state='queued' ORDER BY queued_at LIMIT 1"
+            ).fetchone()
+        return row["playlist_id"] if row else None
+
+    def pending_metadata_ids(self, playlist_id: str) -> list[str]:
+        with self.connect() as db:
+            return [
+                row["id"]
+                for row in db.execute(
+                    "SELECT id FROM videos WHERE playlist_id=? AND in_playlist=1 "
+                    "AND metadata_status='pending' ORDER BY position,id",
+                    (playlist_id,),
+                )
+            ]
+
+    def metadata_has_failures(self, playlist_id: str) -> bool:
+        with self.connect() as db:
+            return (
+                db.execute(
+                    "SELECT 1 FROM videos WHERE playlist_id=? AND in_playlist=1 "
+                    "AND metadata_status='failed' LIMIT 1",
+                    (playlist_id,),
+                ).fetchone()
+                is not None
+            )
 
     def reset_inflight_videos(self, playlist_id: str):
         with self.connect() as db:

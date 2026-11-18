@@ -51,3 +51,8 @@
 - Keep download preferences immutable per subprocess. Persist the new file
   before publishing an updated in-memory snapshot, so failed writes cannot
   silently change the next download's behavior.
+- Metadata-only lookups need their own explicit simulation command: reusing
+  download arguments can enable subtitle/thumbnail writes or format checks.
+  Test against the installed yt-dlp with a media endpoint that must receive no
+  requests. Keep lookup progress separate from media completion and preserve
+  known fields when a lookup fails or an optional thumbnail URL is malformed.

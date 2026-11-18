@@ -208,6 +208,50 @@ function renderPlaylists() {
   updateSelection();
 }
 
+function metadataButton(p) {
+  const job = p.metadata || { state: "idle" };
+  const running = ["queued", "running"].includes(job.state);
+  const resume = ["paused", "error", "completed_with_errors"].includes(
+    job.state,
+  );
+  const label = running
+    ? job.state === "queued"
+      ? "Metadata queued"
+      : "Updating metadata…"
+    : job.state === "paused"
+      ? "Resume metadata"
+      : resume
+        ? "Retry metadata"
+        : "↻ Update metadata";
+  return `<button class="button secondary" data-action="${resume ? "metadata-resume" : "metadata"}" data-focus="metadata-start" ${running || state.busy.has(p.id) ? "disabled" : ""}>${label}</button>`;
+}
+
+function metadataPanel(p) {
+  if (p.source !== "custom") return "";
+  const job = p.metadata || {
+    state: "idle",
+    total: p.total,
+    updated: 0,
+    failed: 0,
+  };
+  const running = ["queued", "running"].includes(job.state);
+  const checked = job.updated + job.failed;
+  const titles = {
+    idle: "Video metadata",
+    queued: "Metadata update queued",
+    running: "Updating video metadata",
+    paused: "Metadata update cancelled",
+    error: "Metadata update stopped",
+    completed: "Metadata updated",
+    completed_with_errors: "Metadata update finished with errors",
+  };
+  const description =
+    job.state === "idle"
+      ? "Fetch titles, channels, and thumbnails before downloading. Uses your saved cookie source for videos that need sign-in."
+      : `${checked} of ${job.total} checked · ${job.updated} updated${job.failed ? ` · ${job.failed} failed` : ""}. ${running ? "You can leave this page; the update continues." : "Existing details are kept when a lookup fails."}`;
+  return `<section class="metadata-panel" aria-label="Video metadata"><div class="metadata-panel-heading"><h3>${escapeHTML(titles[job.state] || "Video metadata")}</h3>${running ? `<button class="button secondary small" data-action="metadata-cancel" data-focus="metadata-cancel" ${state.busy.has(p.id) ? "disabled" : ""}>Cancel update</button>` : ["paused", "error", "completed_with_errors"].includes(job.state) ? `<button class="button quiet small" data-action="metadata" data-focus="metadata-restart" ${state.busy.has(p.id) ? "disabled" : ""}>Update all metadata</button>` : ""}</div><p role="status">${escapeHTML(description)}</p>${job.state !== "idle" ? `<progress class="progress" max="${Math.max(1, job.total)}" value="${checked}" aria-label="Metadata lookup progress">${checked} of ${job.total}</progress>` : ""}${job.error ? `<p class="auth-error">${escapeHTML(job.error)}</p>` : ""}</section>`;
+}
+
 function renderDetail() {
   const p = state.playlist;
   if (!p) return;
@@ -221,7 +265,7 @@ function renderDetail() {
     "Your playlist and its local videos, together in one place.";
   $("#page-description").className = "detail-description";
   $("#page-actions").innerHTML =
-    `<div class="heading-actions">${playlistSourceLink(p, "button secondary")}${p.source === "custom" ? '<span class="badge">Custom playlist</span>' : `<button class="button secondary" data-action="refresh" data-id="${escapeHTML(p.id)}" ${active(p) || state.busy.has(p.id) ? "disabled" : ""}>↻ Refresh videos</button>`}${downloadButton(p)}</div>`;
+    `<div class="heading-actions">${playlistSourceLink(p, "button secondary")}${p.source === "custom" ? metadataButton(p) : `<button class="button secondary" data-action="refresh" data-id="${escapeHTML(p.id)}" ${active(p) || state.busy.has(p.id) ? "disabled" : ""}>↻ Refresh videos</button>`}${downloadButton(p)}</div>`;
   stats([
     ["Playlist videos", p.total],
     ["Videos on disk", p.local_count],
@@ -250,6 +294,7 @@ function renderDetail() {
             !v.local_available)),
   );
   let content = `<div class="folder-location"><span>Folder</span><code>${escapeHTML(p.download_dir)}</code><button class="button secondary small" data-action="folder" ${active(p) ? "disabled" : ""}>Change folder</button></div>`;
+  content += metadataPanel(p);
   // Limit DOM work for large imports while search/filters still cover every video.
   // Clamp the page after polling changes membership or local availability.
   const pageSize = 100;
@@ -269,7 +314,7 @@ function renderDetail() {
   else if (!shown.length)
     content += `<div class="empty"><div class="empty-icon">▤</div><h3>No videos in this view.</h3><p>${p.source === "custom" ? "Try another filter or search." : "Try another filter, or refresh the playlist to check for new videos."}</p></div>`;
   else
-    content += `<div class="video-list">${pageVideos.map((v) => `<article class="video-row"><div class="video-thumb"><div class="art-fallback" aria-hidden="true">▷</div>${safeURL(v.thumbnail) ? `<img src="${safeURL(v.thumbnail)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ""}</div><div class="video-info"><h3>${escapeHTML(v.title)}</h3><p>${escapeHTML(v.channel || v.id)}${v.local_available ? ` · ${bytes(v.size)}` : ""}${!v.in_playlist ? '<span class="removed-label">Removed from playlist · kept locally</span>' : ""}</p>${v.error ? `<details><summary>Download details</summary><p>${escapeHTML(v.error)}</p></details>` : ""}</div><div class="video-actions">${badge(v.local_available ? "downloaded" : v.status)}${v.local_available ? `<button class="button secondary small" data-action="play" data-video="${escapeHTML(v.id)}">▷ Play</button>` : ["unavailable", "failed"].includes(v.status) ? `<button class="button secondary small" data-action="find" data-video="${escapeHTML(v.id)}">${v.recovery ? "Archive links ↗" : "Find archives ↗"}</button>` : ""}<a class="button quiet small" target="_blank" rel="noopener noreferrer" href="https://www.youtube.com/watch?v=${encodeURIComponent(v.id)}" aria-label="Open ${escapeHTML(v.title)} on YouTube (new tab)">YouTube ↗</a></div></article>`).join("")}</div>`;
+    content += `<div class="video-list">${pageVideos.map((v) => `<article class="video-row"><div class="video-thumb"><div class="art-fallback" aria-hidden="true">▷</div>${safeURL(v.thumbnail) ? `<img src="${safeURL(v.thumbnail)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ""}</div><div class="video-info"><h3>${escapeHTML(v.title)}</h3><p>${escapeHTML(v.channel || v.id)}${v.local_available ? ` · ${bytes(v.size)}` : ""}${!v.in_playlist ? '<span class="removed-label">Removed from playlist · kept locally</span>' : ""}</p>${v.error ? `<details><summary>Download details</summary><p>${escapeHTML(v.error)}</p></details>` : ""}${v.metadata_error ? `<details class="metadata-error"><summary>Metadata unavailable</summary><p>${escapeHTML(v.metadata_error)}</p></details>` : ""}</div><div class="video-actions">${badge(v.local_available ? "downloaded" : v.status)}${v.local_available ? `<button class="button secondary small" data-action="play" data-video="${escapeHTML(v.id)}">▷ Play</button>` : ["unavailable", "failed"].includes(v.status) ? `<button class="button secondary small" data-action="find" data-video="${escapeHTML(v.id)}">${v.recovery ? "Archive links ↗" : "Find archives ↗"}</button>` : ""}<a class="button quiet small" target="_blank" rel="noopener noreferrer" href="https://www.youtube.com/watch?v=${encodeURIComponent(v.id)}" aria-label="Open ${escapeHTML(v.title)} on YouTube (new tab)">YouTube ↗</a></div></article>`).join("")}</div>`;
   $("#content").innerHTML = content;
 }
 
@@ -696,6 +741,16 @@ document.addEventListener("click", async (event) => {
     if (action === "refresh") {
       await api(`${apiPath(id)}/refresh`, "POST");
       notice("Video list refreshed. Existing local files have been kept.");
+    }
+    if (["metadata", "metadata-resume", "metadata-cancel"].includes(action)) {
+      const suffix =
+        action === "metadata" ? "" : `/${action.slice("metadata-".length)}`;
+      await api(`${apiPath(id)}/metadata${suffix}`, "POST");
+      notice(
+        action === "metadata-cancel"
+          ? "Metadata update cancelled. Saved progress is kept for resume."
+          : "Metadata update queued. Progress appears in the library; no media download is started.",
+      );
     }
     if (action === "download" || action === "pause") {
       await api(`${apiPath(id)}/${action}`, "POST");

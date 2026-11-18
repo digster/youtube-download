@@ -25,6 +25,7 @@ from .custom_playlists import parse_video_urls
 from .download_settings import DownloadSettings
 from .downloads import DownloadManager
 from .finder import Finder
+from .metadata import MetadataManager
 from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,7 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
     cookies = CookieSettings(settings)
     download_settings = DownloadSettings(settings)
     manager = DownloadManager(store, settings, finder, cookies, download_settings)
+    metadata = MetadataManager(store, settings, cookies, download_settings)
     operations = Lock()
 
     @asynccontextmanager
@@ -74,10 +76,12 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
             cookies.cleanup_sessions()
             if start_worker:
                 manager.start()
+                metadata.start()
             try:
                 yield
             finally:
                 login.cancel()
+                metadata.close()
                 manager.close()
                 fcntl.flock(lock_file, fcntl.LOCK_UN)
 
@@ -88,6 +92,7 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
     app.state.login = login
     app.state.cookies = cookies
     app.state.download_settings = download_settings
+    app.state.metadata = metadata
     app.add_middleware(
         TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "[::1]"]
     )
@@ -328,7 +333,7 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
             if playlist["source"] == "custom":
                 raise HTTPException(
                     400,
-                    "Custom playlists are saved locally and cannot be refreshed from YouTube.",
+                    "Custom playlists keep their local URL list. Use Update metadata to refresh video details.",
                 )
             if playlist["state"] in {"running", "queued"}:
                 raise HTTPException(
@@ -337,6 +342,32 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
             videos = account_call(account.videos, playlist_id)
             store.sync_videos(playlist_id, videos)
         return playlist_detail(playlist_id)
+
+    def metadata_action(playlist_id, action):
+        with operations:
+            playlist = require_playlist(playlist_id)
+            if playlist["source"] != "custom":
+                raise HTTPException(400, "Use Refresh videos for a YouTube playlist.")
+            try:
+                if action == "cancel":
+                    metadata.cancel(playlist_id)
+                else:
+                    metadata.enqueue(playlist_id, resume=action == "resume")
+            except ValueError as exc:
+                raise HTTPException(409, str(exc)) from exc
+        return playlist_detail(playlist_id)
+
+    @app.post("/api/playlists/{playlist_id}/metadata")
+    def update_metadata(playlist_id: str):
+        return metadata_action(playlist_id, "start")
+
+    @app.post("/api/playlists/{playlist_id}/metadata/resume")
+    def resume_metadata(playlist_id: str):
+        return metadata_action(playlist_id, "resume")
+
+    @app.post("/api/playlists/{playlist_id}/metadata/cancel")
+    def cancel_metadata(playlist_id: str):
+        return metadata_action(playlist_id, "cancel")
 
     @app.post("/api/playlists/{playlist_id}/download")
     def download(playlist_id: str):

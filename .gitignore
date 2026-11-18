@@ -17,6 +17,7 @@ token.json
 cookies*.txt
 cookies.json
 cookie-sessions/
+metadata-sessions/
 .cookies-*
 download-settings.json
 .download-settings-*

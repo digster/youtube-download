@@ -171,3 +171,16 @@ Attached screenshot shows a Watch Later import rejected by the 500-video limit.
 Also remember to do the commits for me.
 
 continue
+
+## 2026-11-17 — Custom playlist metadata updates
+
+For custom playlists, also add an option to update the video metadata for the
+videos in the list based on the video URLs.
+
+Attached screenshot shows a custom playlist with generic video-ID labels.
+
+continue
+
+## 2026-11-17 — Commit authorization reaffirmed
+
+I had asked you to commit for me.

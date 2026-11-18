@@ -1365,6 +1365,33 @@ video {
   color: var(--muted);
   font-size: 12px;
 }
+.metadata-panel {
+  padding: 18px;
+  margin-bottom: 20px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f6f9f2;
+}
+.metadata-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.metadata-panel h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.metadata-panel p {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.metadata-panel .auth-error,
+.video-info .metadata-error {
+  color: var(--danger);
+}
 @media (max-width: 600px) {
   .download-settings-grid {
     grid-template-columns: 1fr;

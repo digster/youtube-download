@@ -4,14 +4,16 @@
 
 Shelf is a local FastAPI server with a buildless HTML/CSS/JavaScript client.
 SQLite persists metadata and job intent, while yt-dlp owns transfer and merge
-details. There is one background download worker per data directory. Runtime
-files are deliberately separate from versioned source.
+details. There is one background download worker and one independent metadata
+worker per data directory. Runtime files are deliberately separate from
+versioned source.
 
 ```text
 Browser: static/index.html + app.js + style.css
   ├─ GET /api/playlists, /api/playlists/:id (poll every 2 seconds)
   ├─ POST sync, refresh, download, pause, folder, find
   ├─ POST /api/playlists/custom (local URL list → saved membership)
+  ├─ POST /api/playlists/:id/metadata, /metadata/resume, /metadata/cancel
   ├─ POST /api/auth/start, /config, /cancel; GET /api/auth/status
   ├─ GET/POST /api/cookies; POST /api/cookies/file
   ├─ GET/POST /api/download-settings; POST /api/download-settings/reset
@@ -27,6 +29,8 @@ Browser: static/index.html + app.js + style.css
                             yt-dlp → ffmpeg → local files
                                 │
                              finder.py → youtubevideofinder v5 HTTP API
+
+  metadata.py → runner.py → yt-dlp simulation → metadata fields in SQLite
 ```
 
 ## Boundaries and decisions
@@ -57,13 +61,17 @@ Browser: static/index.html + app.js + style.css
   time with explicit options, no shell, no external yt-dlp configuration, and no
   user plugins. Files are named by video ID, so title changes and reordering do
   not change the resume destination. Each playlist has its own physical copies.
+- `metadata.py` owns a separate persistent queue for custom video inspection.
+  `MetadataManager` shares cookie/download settings with the download worker,
+  but runs its own simulation-only `runner.py` subprocess and writes only
+  title/channel/thumbnail and metadata progress fields. No Google API is used.
 - `download_settings.py` owns immutable, strictly validated `DownloadOptions`
   and atomic saved preferences. `DownloadManager` snapshots these immediately
   before building each subprocess command. The same service instance is shared
   with the settings API; a save affects subsequent launches, including retries,
   without mutating a running command or the startup `Settings` object.
 - `cookies.py` owns live cookie preferences, upload validation, and per-video
-  snapshots. `app.py` and `DownloadManager` share one instance. The manager takes
+  snapshots. `app.py` and both workers share one instance. Each manager takes
   a fresh snapshot before each subprocess, so settings changes apply without
   mutating the frozen startup Settings or interrupting an in-flight video.
 - `runner.py` holds an exclusive per-video filesystem lock and watches its
@@ -118,6 +126,40 @@ Failures such as HTTP 429, network errors, or bot challenges remain retryable
 lookup. Known deleted/private entries in an API snapshot are also looked up
 when the playlist runs. Remaining videos continue. Retrying does not
 automatically refresh remote playlist contents; that is a separate action.
+
+## Custom playlist metadata updates
+
+The protected metadata POST routes accept only custom playlists and return the
+usual library snapshot. `metadata_jobs` stores queued/running/paused/completed/
+completed_with_errors/error states independently of the media queue. Each video
+has `metadata_status`, `metadata_error`, and `metadata_updated_at`; successful
+lookups commit immediately. Resume retries pending/failed rows; a full update
+resets lookup progress without deleting known fields. Repeated starts while
+queued/running do not reset progress. Startup requeues running metadata work,
+while explicit cancellations stay paused. Shutdown terminates the process group
+and requeues unfinished work; the existing runner watches for parent death.
+
+The worker builds canonical watch URLs from validated saved video IDs. Explicit
+`--simulate --skip-download --no-check-formats --ignore-no-formats-error` options
+allow inspection without downloading or probing media formats. A compact JSON
+print template returns only ID/title/channel/uploader/thumbnail. Preferences
+that request subtitles, thumbnail files, or postprocessing are never passed to
+this command. Cookie snapshots apply per lookup; network timeout/retry preferences
+are capped at 30 seconds/one retry, with a 90-second overall lookup deadline.
+
+Output is bounded to 1 MiB in a private `metadata-sessions/` scratch directory;
+the matching ID, useful title, and optional HTTPS thumbnail are validated before
+writing. Invalid optional images preserve useful titles. Scratch directories and
+cookie snapshots are cleaned after each lookup and at startup under the server
+lock. Raw extractor output is not logged or exposed. Per-video failures retain
+known metadata and continue; cookie configuration or unexpected worker failures
+stop the job with a resumable error. Download status, files, partial transfers,
+playlist order, and membership remain independent of metadata writes.
+
+The custom library heading offers Update/Resume/Retry metadata; a separate panel
+shows counts and Cancel/Update all controls. Two-second library polling displays
+progress and refreshed rows without making the open tab responsible for work.
+Metadata jobs cover all current membership, independent of pagination/filtering.
 
 ## Folder changes and retained data
 
@@ -254,7 +296,10 @@ the setup dialog and directs the user to the reconnect button.
 - `uv run youtube-download serve` is the supported entry point; dotenv is loaded
   there. `create_app(Settings(...), account=..., start_worker=False)` enables
   isolated browser/test fixtures without real account access or downloads.
-- `uv run pytest -q` runs API/store/finder/worker tests. The real yt-dlp test uses
+- `uv run pytest -q` runs API/store/finder/worker tests. Metadata tests cover
+  migrations, failure preservation, cancellation, shutdown/restart recovery,
+  and a real yt-dlp simulation with a localhost media trap that must receive
+  zero requests and produce no media or sidecars. The real download test uses
   a generated ffmpeg clip and a temporary localhost HTTP server. It requires
   local network binding but no YouTube credentials or external network.
 - There is no frontend bundling step. Static assets are included in the wheel.
@@ -265,7 +310,7 @@ the setup dialog and directs the user to the reconnect button.
 - Runtime logs are rotated at 2 MB with three backups. SQLite, downloads,
   cookies, credentials, `.env`, logs, and browser artifacts are ignored by Git.
 
-The schema is created idempotently. The folder-override and source columns have
-additive compatibility migrations in `Store.__init__`; there is no external migration
-framework. The advisory API quota file is app-local; Google's real project
+The schema is created idempotently. The folder-override, source, and metadata
+columns have additive compatibility migrations in `Store.__init__`; there is no
+external migration framework. The advisory API quota file is app-local; Google's real project
 quota is shared with other tools using the same OAuth client.
