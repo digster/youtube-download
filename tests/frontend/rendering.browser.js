@@ -189,6 +189,19 @@ async function testLibraryRendering(page) {
 
   await page.goto(origin + "/playlists/active");
   await page.locator(".video-row").last().waitFor();
+  // A decoded image can still be clipped below the full-height placeholder.
+  // Check what the browser displays inside the artwork slot.
+  const thumbnail = page.locator(".video-thumb").first();
+  await thumbnail.scrollIntoViewIfNeeded();
+  check(
+    await thumbnail.evaluate(async (slot) => {
+      const image = slot.querySelector("img");
+      await image.decode();
+      const { x, y, width, height } = slot.getBoundingClientRect();
+      return document.elementFromPoint(x + width / 2, y + height / 2) === image;
+    }),
+    "The video thumbnail loaded but the placeholder covers its slot",
+  );
   await page.locator("summary").first().click();
   await page.evaluate(() => {
     window.rows = [...document.querySelectorAll(".video-row")];

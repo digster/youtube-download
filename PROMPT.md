@@ -203,3 +203,11 @@ There is a very visible repaint/refresh happening in the UI. See how it can be f
 Attached screenshot shows the playlist overview with 70 playlists and one active job.
 
 Also do the commits for me.
+
+## 2026-11-18 — Video thumbnails inside playlists
+
+Why are there no thumbnails for the videos in a list?
+
+Attached screenshot shows two video rows with play-icon placeholders.
+
+continue

@@ -66,3 +66,6 @@
   Keep thumbnail elements mounted across ticks. Verify node identity in a
   browser because identical HTML after a refresh can hide image replacement,
   focus loss, and closed native disclosures.
+- Video thumbnail slots clip their contents. A decoded image with the right
+  dimensions can still sit below the fallback. Scroll the slot into view and
+  check which element the browser displays at its center.
