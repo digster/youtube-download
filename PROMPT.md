@@ -195,3 +195,11 @@ Okay, then work on these improvements.
 
 Accepted improvements: frequent polling during active jobs, slower checks when
 idle, and immediate refresh when returning to a tab.
+
+## 2026-11-18 — Visible library refresh
+
+There is a very visible repaint/refresh happening in the UI. See how it can be fixed.
+
+Attached screenshot shows the playlist overview with 70 playlists and one active job.
+
+Also do the commits for me.

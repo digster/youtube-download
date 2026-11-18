@@ -142,13 +142,81 @@ function notice(message, error = false) {
   $("#notice").hidden = false;
 }
 
+// Cache the last requested markup, rather than serializing the live DOM. A
+// failed thumbnail can then stay on its fallback until its URL actually changes.
+const lastMarkup = new WeakMap();
+function setMarkup(element, html) {
+  if (lastMarkup.get(element) === html) return;
+  element.innerHTML = html;
+  lastMarkup.set(element, html);
+}
+
+function setText(element, value) {
+  const text = String(value ?? "");
+  if (element.textContent !== text) element.textContent = text;
+}
+
+function setHidden(element, hidden) {
+  if (element.hidden !== hidden) element.hidden = hidden;
+}
+
+function renderArtwork(element, thumbnail, fallback) {
+  const url = safeURL(thumbnail);
+  setMarkup(
+    element,
+    fallback +
+      (url
+        ? `<img src="${url}" alt="" loading="lazy" referrerpolicy="no-referrer">`
+        : ""),
+  );
+}
+
+// Keep each visible record's article mounted. Remove filtered/deleted items
+// first so removing an early result never moves all its surviving siblings.
+const renderedItems = new Map();
+function renderItems(
+  items,
+  className,
+  updateItem,
+  signatureOf = JSON.stringify,
+) {
+  const list = $("#library-items");
+  if (list.className !== className) list.className = className;
+  const visible = new Set(items.map((item) => item.id));
+  for (const [id, entry] of renderedItems) {
+    if (!visible.has(id)) {
+      entry.node.remove();
+      renderedItems.delete(id);
+    }
+  }
+  let next = list.firstElementChild;
+  for (const item of items) {
+    const previous = renderedItems.get(item.id);
+    const node = previous?.node ?? document.createElement("article");
+    const signature = signatureOf(item);
+    if (signature !== previous?.signature) {
+      updateItem(node, item);
+      renderedItems.set(item.id, { node, signature });
+    }
+    if (node !== next) list.insertBefore(node, next);
+    next = node.nextElementSibling;
+  }
+}
+
 function stats(items) {
-  $("#stats").innerHTML = items
-    .map(
-      ([label, value, suffix]) =>
-        `<div class="stat"><label>${escapeHTML(label)}</label><strong>${escapeHTML(value)}</strong>${suffix ? `<small>${escapeHTML(suffix)}</small>` : ""}</div>`,
-    )
-    .join("");
+  const container = $("#stats");
+  setMarkup(
+    container,
+    items
+      .map(
+        ([label]) =>
+          `<div class="stat"><label>${escapeHTML(label)}</label><strong></strong></div>`,
+      )
+      .join(""),
+  );
+  items.forEach(([, value], i) =>
+    setText(container.children[i].lastElementChild, value),
+  );
 }
 
 function downloadButton(p, small = false) {
@@ -206,9 +274,56 @@ function visiblePlaylists() {
   });
 }
 
+function renderPlaylistCard(card, p) {
+  const selected = state.selected.has(p.id);
+  if (!card.firstElementChild) {
+    const id = escapeHTML(p.id);
+    card.className = "card";
+    card.innerHTML = `
+      <div class="card-top"><div class="art-fallback" aria-hidden="true"></div>
+        <label class="card-check"><input type="checkbox" data-select="${id}" data-focus="select-${id}"></label><span class="video-count"></span></div>
+      <div class="card-body"><div class="card-summary"></div><div class="status-line"></div>
+        <progress class="progress" max="100" value="0"></progress>
+        <div class="card-footer"><a class="library-link" href="/playlists/${encodeURIComponent(p.id)}">View library <span>↗</span></a><span class="download-action"></span></div></div>`;
+  }
+  card.classList.toggle("selected", selected);
+  const checkbox = card.querySelector("input");
+  if (checkbox.checked !== selected) checkbox.checked = selected;
+  const selectLabel = `Select ${p.title}`;
+  if (checkbox.getAttribute("aria-label") !== selectLabel)
+    checkbox.setAttribute("aria-label", selectLabel);
+
+  renderArtwork(card.querySelector(".art-fallback"), p.thumbnail, "▤");
+  setText(card.querySelector(".video-count"), `▤ \u00a0${p.total} videos`);
+  setMarkup(
+    card.querySelector(".card-summary"),
+    `<a class="card-title" href="/playlists/${encodeURIComponent(p.id)}" title="${escapeHTML(p.title)}">${escapeHTML(p.title)}</a><div class="card-meta"><span>${escapeHTML(p.channel || "Your YouTube account")}</span><span>${escapeHTML(p.privacy || "Playlist")}</span></div>${playlistSourceLink(p, "playlist-source")}`,
+  );
+  setMarkup(
+    card.querySelector(".status-line"),
+    `${badge(p.state)}<span>${p.downloaded} of ${p.total} saved</span>`,
+  );
+  const progress = card.querySelector("progress");
+  const percent = p.total
+    ? Math.min(
+        100,
+        Math.round(
+          (100 * (p.downloaded + (p.current_video ? p.progress / 100 : 0))) /
+            p.total,
+        ),
+      )
+    : 0;
+  if (progress.value !== percent) progress.value = percent;
+  setText(progress, `${percent}%`);
+  const progressLabel = `${p.title} download progress`;
+  if (progress.getAttribute("aria-label") !== progressLabel)
+    progress.setAttribute("aria-label", progressLabel);
+  setMarkup(card.querySelector(".download-action"), downloadButton(p, true));
+}
+
 function renderPlaylists() {
   const playlists = state.playlists;
-  $("#nav-count").textContent = playlists.length;
+  setText($("#nav-count"), playlists.length);
   stats([
     ["Playlists", playlists.length],
     ["Videos on disk", playlists.reduce((s, p) => s + p.local_count, 0)],
@@ -216,33 +331,18 @@ function renderPlaylists() {
     ["Library size", bytes(playlists.reduce((s, p) => s + p.bytes, 0))],
   ]);
   const shown = visiblePlaylists();
+  let info = "";
   if (!playlists.length) {
-    $("#content").innerHTML =
-      `<div class="empty"><div class="empty-icon">▤</div><h3>A home for your playlists.</h3><p>Create a playlist from video URLs, or sync your YouTube account. Downloads and progress will appear here.</p><button class="button primary" data-action="create-playlist">+ Create playlist</button> <button class="button secondary" data-action="sync">↻ Sync playlists</button> <button class="button quiet" data-action="setup">Account setup ↗</button></div>`;
+    info = `<div class="empty"><div class="empty-icon">▤</div><h3>A home for your playlists.</h3><p>Create a playlist from video URLs, or sync your YouTube account. Downloads and progress will appear here.</p><button class="button primary" data-action="create-playlist">+ Create playlist</button> <button class="button secondary" data-action="sync">↻ Sync playlists</button> <button class="button quiet" data-action="setup">Account setup ↗</button></div>`;
   } else if (!shown.length) {
-    $("#content").innerHTML =
+    info =
       '<div class="empty"><div class="empty-icon">⌕</div><h3>Nothing here just yet.</h3><p>No playlists match this view. Try a different filter or search.</p></div>';
-  } else {
-    $("#content").innerHTML = `<div class="grid">${shown
-      .map((p) => {
-        const percent = p.total
-          ? Math.min(
-              100,
-              Math.round(
-                ((p.downloaded + (p.current_video ? p.progress / 100 : 0)) /
-                  p.total) *
-                  100,
-              ),
-            )
-          : 0;
-        return `<article class="card ${state.selected.has(p.id) ? "selected" : ""}">
-        <div class="card-top"><div class="art-fallback" aria-hidden="true">▤</div>${safeURL(p.thumbnail) ? `<img src="${safeURL(p.thumbnail)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ""}<label class="card-check"><input type="checkbox" data-select="${escapeHTML(p.id)}" data-focus="select-${escapeHTML(p.id)}" aria-label="Select ${escapeHTML(p.title)}" ${state.selected.has(p.id) ? "checked" : ""}></label><span class="video-count">▤ &nbsp;${p.total} videos</span></div>
-        <div class="card-body"><a class="card-title" href="/playlists/${encodeURIComponent(p.id)}" title="${escapeHTML(p.title)}">${escapeHTML(p.title)}</a><div class="card-meta"><span>${escapeHTML(p.channel || "Your YouTube account")}</span><span>${escapeHTML(p.privacy || "Playlist")}</span></div>${playlistSourceLink(p, "playlist-source")}<div class="status-line">${badge(p.state)}<span>${p.downloaded} of ${p.total} saved</span></div><progress class="progress" max="100" value="${percent}" aria-label="${escapeHTML(p.title)} download progress">${percent}%</progress><div class="card-footer"><a class="library-link" href="/playlists/${encodeURIComponent(p.id)}">View library <span>↗</span></a>${downloadButton(p, true)}</div></div>
-      </article>`;
-      })
-      .join("")}</div>`;
   }
-  updateSelection();
+  setMarkup($("#library-info"), info);
+  renderItems(shown, "grid", renderPlaylistCard, (p) =>
+    JSON.stringify([p, state.selected.has(p.id), state.busy.has(p.id)]),
+  );
+  updateSelection(shown);
 }
 
 function metadataButton(p) {
@@ -263,8 +363,12 @@ function metadataButton(p) {
   return `<button class="button secondary" data-action="${resume ? "metadata-resume" : "metadata"}" data-focus="metadata-start" ${running || state.busy.has(p.id) ? "disabled" : ""}>${label}</button>`;
 }
 
-function metadataPanel(p) {
-  if (p.source !== "custom") return "";
+function renderMetadataPanel(p) {
+  const container = $("#metadata-info");
+  if (p.source !== "custom") {
+    setMarkup(container, "");
+    return;
+  }
   const job = p.metadata || {
     state: "idle",
     total: p.total,
@@ -286,23 +390,85 @@ function metadataPanel(p) {
     job.state === "idle"
       ? "Fetch titles, channels, and thumbnails before downloading. Uses your saved cookie source for videos that need sign-in."
       : `${checked} of ${job.total} checked · ${job.updated} updated${job.failed ? ` · ${job.failed} failed` : ""}. ${running ? "You can leave this page; the update continues." : "Existing details are kept when a lookup fails."}`;
-  return `<section class="metadata-panel" aria-label="Video metadata"><div class="metadata-panel-heading"><h3>${escapeHTML(titles[job.state] || "Video metadata")}</h3>${running ? `<button class="button secondary small" data-action="metadata-cancel" data-focus="metadata-cancel" ${state.busy.has(p.id) ? "disabled" : ""}>Cancel update</button>` : ["paused", "error", "completed_with_errors"].includes(job.state) ? `<button class="button quiet small" data-action="metadata" data-focus="metadata-restart" ${state.busy.has(p.id) ? "disabled" : ""}>Update all metadata</button>` : ""}</div><p role="status">${escapeHTML(description)}</p>${job.state !== "idle" ? `<progress class="progress" max="${Math.max(1, job.total)}" value="${checked}" aria-label="Metadata lookup progress">${checked} of ${job.total}</progress>` : ""}${job.error ? `<p class="auth-error">${escapeHTML(job.error)}</p>` : ""}</section>`;
+  setMarkup(
+    container,
+    `<section class="metadata-panel" aria-label="Video metadata">
+    <div class="metadata-panel-heading"></div><p role="status"></p>
+    <progress class="progress" value="0" aria-label="Metadata lookup progress"></progress><p class="auth-error" hidden></p></section>`,
+  );
+  const disabled = state.busy.has(p.id) ? "disabled" : "";
+  const action = running
+    ? `<button class="button secondary small" data-action="metadata-cancel" data-focus="metadata-cancel" ${disabled}>Cancel update</button>`
+    : ["paused", "error", "completed_with_errors"].includes(job.state)
+      ? `<button class="button quiet small" data-action="metadata" data-focus="metadata-restart" ${disabled}>Update all metadata</button>`
+      : "";
+  setMarkup(
+    container.querySelector(".metadata-panel-heading"),
+    `<h3>${escapeHTML(titles[job.state] || "Video metadata")}</h3>${action}`,
+  );
+  setText(container.querySelector('[role="status"]'), description);
+  const progress = container.querySelector("progress");
+  setHidden(progress, job.state === "idle");
+  if (!progress.hidden) {
+    const max = Math.max(1, job.total);
+    if (progress.max !== max) progress.max = max;
+    if (progress.value !== checked) progress.value = checked;
+    setText(progress, `${checked} of ${job.total}`);
+  }
+  const error = container.querySelector(".auth-error");
+  setHidden(error, !job.error);
+  setText(error, job.error || "");
+}
+
+function renderVideoRow(row, v) {
+  if (!row.firstElementChild) {
+    row.className = "video-row";
+    row.innerHTML = `<div class="video-thumb"><div class="art-fallback" aria-hidden="true"></div></div>
+      <div class="video-info"><h3></h3><p></p>
+        <details hidden><summary>Download details</summary><p></p></details>
+        <details class="metadata-error" hidden><summary>Metadata unavailable</summary><p></p></details>
+      </div><div class="video-actions"></div>`;
+  }
+  renderArtwork(row.querySelector(".art-fallback"), v.thumbnail, "▷");
+  setText(row.querySelector("h3"), v.title);
+  setMarkup(
+    row.querySelector(".video-info > p"),
+    `${escapeHTML(v.channel || v.id)}${v.local_available ? ` · ${bytes(v.size)}` : ""}${!v.in_playlist ? '<span class="removed-label">Removed from playlist · kept locally</span>' : ""}`,
+  );
+  // Keep expanded errors open as metadata or download progress arrives.
+  const details = row.querySelectorAll("details");
+  [v.error, v.metadata_error].forEach((message, i) => {
+    const disclosure = details[i];
+    setHidden(disclosure, !message);
+    if (message) setText(disclosure.querySelector("p"), message);
+    else if (disclosure.open) disclosure.open = false;
+  });
+  setMarkup(
+    row.querySelector(".video-actions"),
+    `${badge(v.local_available ? "downloaded" : v.status)}${v.local_available ? `<button class="button secondary small" data-action="play" data-video="${escapeHTML(v.id)}">▷ Play</button>` : ["unavailable", "failed"].includes(v.status) ? `<button class="button secondary small" data-action="find" data-video="${escapeHTML(v.id)}">${v.recovery ? "Archive links ↗" : "Find archives ↗"}</button>` : ""}<a class="button quiet small" target="_blank" rel="noopener noreferrer" href="https://www.youtube.com/watch?v=${encodeURIComponent(v.id)}" aria-label="Open ${escapeHTML(v.title)} on YouTube (new tab)">YouTube ↗</a>`,
+  );
 }
 
 function renderDetail() {
   const p = state.playlist;
   if (!p) return;
-  $("#nav-count").hidden = true;
-  document.title = `${p.title} · Shelf`;
-  $("#breadcrumb").innerHTML =
-    `<a href="/">Playlists</a><span>/</span> Local library`;
-  $("#page-title").textContent = p.title;
-  $("#page-description").textContent =
+  setHidden($("#nav-count"), true);
+  const title = `${p.title} · Shelf`;
+  if (document.title !== title) document.title = title;
+  setMarkup(
+    $("#breadcrumb"),
+    '<a href="/">Playlists</a><span>/</span> Local library',
+  );
+  setText($("#page-title"), p.title);
+  setText(
+    $("#page-description"),
     p.description ||
-    "Your playlist and its local videos, together in one place.";
-  $("#page-description").className = "detail-description";
-  $("#page-actions").innerHTML =
-    `<div class="heading-actions">${playlistSourceLink(p, "button secondary")}${p.source === "custom" ? metadataButton(p) : `<button class="button secondary" data-action="refresh" data-id="${escapeHTML(p.id)}" ${active(p) || state.busy.has(p.id) ? "disabled" : ""}>↻ Refresh videos</button>`}${downloadButton(p)}</div>`;
+      "Your playlist and its local videos, together in one place.",
+  );
+  setMarkup(
+    $("#page-actions"),
+    `<div class="heading-actions">${playlistSourceLink(p, "button secondary")}${p.source === "custom" ? metadataButton(p) : `<button class="button secondary" data-action="refresh" data-id="${escapeHTML(p.id)}" ${active(p) || state.busy.has(p.id) ? "disabled" : ""}>↻ Refresh videos</button>`}${downloadButton(p)}</div>`,
+  );
   stats([
     ["Playlist videos", p.total],
     ["Videos on disk", p.local_count],
@@ -316,9 +482,11 @@ function renderDetail() {
     ],
     ["Saved locally", bytes(p.bytes)],
   ]);
-  $("#collection-title").textContent = "Playlist library";
-  $("#collection-description").textContent =
-    `${labels[p.state] || p.state}${p.current_video ? ` · Current video ${Math.round(p.progress)}%` : ""}`;
+  setText($("#collection-title"), "Playlist library");
+  setText(
+    $("#collection-description"),
+    `${labels[p.state] || p.state}${p.current_video ? ` · Current video ${Math.round(p.progress)}%` : ""}`,
+  );
   const shown = state.videos.filter(
     (v) =>
       `${v.title} ${v.channel} ${v.id}`
@@ -330,8 +498,15 @@ function renderDetail() {
           : ["failed", "unavailable", "missing"].includes(v.status) &&
             !v.local_available)),
   );
-  let content = `<div class="folder-location"><span>Folder</span><code>${escapeHTML(p.download_dir)}</code><button class="button secondary small" data-action="folder" ${active(p) ? "disabled" : ""}>Change folder</button></div>`;
-  content += metadataPanel(p);
+  setMarkup(
+    $("#library-info"),
+    '<div id="folder-info"></div><div id="metadata-info"></div><div id="page-info"></div><div id="result-info"></div>',
+  );
+  setMarkup(
+    $("#folder-info"),
+    `<div class="folder-location"><span>Folder</span><code>${escapeHTML(p.download_dir)}</code><button class="button secondary small" data-action="folder" ${active(p) ? "disabled" : ""}>Change folder</button></div>`,
+  );
+  renderMetadataPanel(p);
   // Limit DOM work for large imports while search/filters still cover every video.
   // Clamp the page after polling changes membership or local availability.
   const pageSize = 100;
@@ -341,44 +516,57 @@ function renderDetail() {
   );
   const start = state.videoPage * pageSize;
   const pageVideos = shown.slice(start, start + pageSize);
+  let pagination = "";
   if (shown.length > pageSize) {
-    content += `<nav class="video-pagination" aria-label="Video pages"><span>Videos ${start + 1}–${Math.min(start + pageSize, shown.length)} of ${shown.length}</span><div class="heading-actions"><button class="button secondary small" data-action="video-page" data-page="${state.videoPage - 1}" ${state.videoPage === 0 ? "disabled" : ""}>← Previous</button><button class="button secondary small" data-action="video-page" data-page="${state.videoPage + 1}" ${start + pageSize >= shown.length ? "disabled" : ""}>Next →</button></div></nav>`;
+    pagination = `<nav class="video-pagination" aria-label="Video pages"><span>Videos ${start + 1}–${Math.min(start + pageSize, shown.length)} of ${shown.length}</span><div class="heading-actions"><button class="button secondary small" data-action="video-page" data-page="${state.videoPage - 1}" ${state.videoPage === 0 ? "disabled" : ""}>← Previous</button><button class="button secondary small" data-action="video-page" data-page="${state.videoPage + 1}" ${start + pageSize >= shown.length ? "disabled" : ""}>Next →</button></div></nav>`;
   }
-  if (p.error) content += `<p class="muted">${escapeHTML(p.error)}</p>`;
+  setMarkup($("#page-info"), pagination);
+  let content = p.error ? `<p class="muted">${escapeHTML(p.error)}</p>` : "";
   if (!p.items_synced_at)
     content +=
       '<div class="empty"><div class="empty-icon">▤</div><h3>Bring the playlist into view.</h3><p>Load its video list to see what is available, then start a download when you are ready.</p><button class="button primary" data-action="refresh">↻ Load videos</button></div>';
   else if (!shown.length)
     content += `<div class="empty"><div class="empty-icon">▤</div><h3>No videos in this view.</h3><p>${p.source === "custom" ? "Try another filter or search." : "Try another filter, or refresh the playlist to check for new videos."}</p></div>`;
-  else
-    content += `<div class="video-list">${pageVideos.map((v) => `<article class="video-row"><div class="video-thumb"><div class="art-fallback" aria-hidden="true">▷</div>${safeURL(v.thumbnail) ? `<img src="${safeURL(v.thumbnail)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ""}</div><div class="video-info"><h3>${escapeHTML(v.title)}</h3><p>${escapeHTML(v.channel || v.id)}${v.local_available ? ` · ${bytes(v.size)}` : ""}${!v.in_playlist ? '<span class="removed-label">Removed from playlist · kept locally</span>' : ""}</p>${v.error ? `<details><summary>Download details</summary><p>${escapeHTML(v.error)}</p></details>` : ""}${v.metadata_error ? `<details class="metadata-error"><summary>Metadata unavailable</summary><p>${escapeHTML(v.metadata_error)}</p></details>` : ""}</div><div class="video-actions">${badge(v.local_available ? "downloaded" : v.status)}${v.local_available ? `<button class="button secondary small" data-action="play" data-video="${escapeHTML(v.id)}">▷ Play</button>` : ["unavailable", "failed"].includes(v.status) ? `<button class="button secondary small" data-action="find" data-video="${escapeHTML(v.id)}">${v.recovery ? "Archive links ↗" : "Find archives ↗"}</button>` : ""}<a class="button quiet small" target="_blank" rel="noopener noreferrer" href="https://www.youtube.com/watch?v=${encodeURIComponent(v.id)}" aria-label="Open ${escapeHTML(v.title)} on YouTube (new tab)">YouTube ↗</a></div></article>`).join("")}</div>`;
-  $("#content").innerHTML = content;
+  setMarkup($("#result-info"), content);
+  renderItems(
+    p.items_synced_at ? pageVideos : [],
+    "video-list",
+    renderVideoRow,
+  );
 }
 
 function render() {
   // Polls may update cards while someone is using the keyboard. Restore the same
   // control's focus when it still exists; search inputs and dialogs are untouched.
-  const focused = document.activeElement?.dataset.focus;
+  const focused = document.activeElement;
+  const focusKey = focused?.dataset.focus;
   if (playlistId) renderDetail();
   else renderPlaylists();
-  if (focused)
-    document
-      .querySelector(`[data-focus="${CSS.escape(focused)}"]`)
-      ?.focus({ preventScroll: true });
-  $("#content").setAttribute("aria-busy", "false");
+  if (focused && focused !== document.activeElement) {
+    const control = focused.isConnected
+      ? focused
+      : focusKey &&
+        document.querySelector(`[data-focus="${CSS.escape(focusKey)}"]`);
+    if (control) control.focus({ preventScroll: true });
+  }
+  const content = $("#content");
+  if (content.getAttribute("aria-busy") !== "false")
+    content.setAttribute("aria-busy", "false");
 }
 
-function updateSelection() {
-  $("#selection-bar").hidden = !state.selected.size;
-  $("#selection-count").textContent =
-    `${state.selected.size} playlist${state.selected.size === 1 ? "" : "s"} selected`;
-  const visible = visiblePlaylists();
+function updateSelection(visible) {
+  setHidden($("#selection-bar"), !state.selected.size);
+  setText(
+    $("#selection-count"),
+    `${state.selected.size} playlist${state.selected.size === 1 ? "" : "s"} selected`,
+  );
   const all = $("#select-all");
   if (all) {
-    all.checked =
+    const checked =
       visible.length > 0 && visible.every((p) => state.selected.has(p.id));
-    all.indeterminate =
-      !all.checked && visible.some((p) => state.selected.has(p.id));
+    const partial = !checked && visible.some((p) => state.selected.has(p.id));
+    if (all.checked !== checked) all.checked = checked;
+    if (all.indeterminate !== partial) all.indeterminate = partial;
   }
 }
 
@@ -387,20 +575,22 @@ async function fetchLibrary(force = false) {
     const data = await api(playlistId ? apiPath() : "/api/playlists");
     const signature = JSON.stringify(data);
     if (force || signature !== state.signature) {
-      state.signature = signature;
       if (playlistId) {
         state.playlist = data.playlist;
         state.videos = data.videos;
       } else state.playlists = data.playlists;
       render();
+      state.signature = signature;
     }
-    $("#connection").innerHTML = '<span class="dot"></span> Local library';
+    setMarkup($("#connection"), '<span class="dot"></span> Local library');
   } catch (error) {
-    $("#connection").textContent = "Connection interrupted";
+    setMarkup($("#connection"), "Connection interrupted");
     if (!state.signature) {
       notice(error.message, true);
-      $("#content").innerHTML =
-        '<div class="empty"><h3>Library is unavailable.</h3><p>Check that the local server is running, or return to your playlists.</p><a class="button secondary" href="/">Back to playlists</a></div>';
+      setMarkup(
+        $("#library-info"),
+        '<div class="empty"><h3>Library is unavailable.</h3><p>Check that the local server is running, or return to your playlists.</p><a class="button secondary" href="/">Back to playlists</a></div>',
+      );
     }
     return false;
   }
@@ -943,6 +1133,7 @@ async function initialize() {
     )
     .classList.add("active");
   if (playlistId) {
+    $("#page-description").classList.add("detail-description");
     $("#search").placeholder = "Search videos…";
     $("#search").setAttribute("aria-label", "Search videos");
   } else if (view !== "all") {

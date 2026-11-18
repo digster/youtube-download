@@ -62,3 +62,7 @@
   delay progress updates. Likewise, ignore sign-in status reads superseded by
   a newer start/cancel/config action, and deduplicate visibility/page-cache
   resume events so returning to a tab does not produce duplicate requests.
+- A changed API snapshot can represent one progress value in a large grid.
+  Keep thumbnail elements mounted across ticks. Verify node identity in a
+  browser because identical HTML after a refresh can hide image replacement,
+  focus loss, and closed native disclosures.

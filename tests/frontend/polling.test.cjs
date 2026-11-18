@@ -118,6 +118,9 @@ async function harness({ detail = false, hidden = false } = {}) {
     fs.readFileSync(path.join(staticDir, "app.js"), "utf8"),
     context,
   );
+  // Rendering needs native DOM nodes. The browser regression exercises it
+  // through these same poll ticks while this harness isolates the scheduler.
+  vm.runInContext("render = () => {}", context);
   const flush = async () => {
     for (let i = 0; i < 30; i++) await Promise.resolve();
   };
@@ -326,7 +329,7 @@ test("server failures back off even when the last snapshot is active", async () 
   await h.advance(2000);
   const failed = h.libraryRequests().length;
   assert.equal(
-    h.document.querySelector("#connection").textContent,
+    h.document.querySelector("#connection").innerHTML,
     "Connection interrupted",
   );
   await h.advance(29999);

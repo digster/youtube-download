@@ -297,8 +297,14 @@ refreshes immediately and handles duplicate restore events once. An already
 started read can finish while hidden but schedules no further polling. There
 are no hidden-tab polling timers, cross-tab leader election, or server push.
 Changes made in another tab appear on the next idle read or return-to-tab read.
-Polls preserve focused controls; dialogs/search remain outside the rerendered
-list. Workers keep running independently of the tab.
+`renderItems` in `static/app.js` matches visible cards and video rows by ID.
+Its cache holds only mounted articles and their last rendered signatures.
+Playlist signatures include the browser's selection and busy state. Changed
+records update individual fields. Artwork is a separate region so progress
+updates preserve decoded images, and a failed URL keeps its fallback until
+the URL changes or the item leaves the view. Headers, counters, and the
+metadata panel update independently of the list. Workers keep running
+independently of the tab.
 
 A separate poller checks sign-in every 2 seconds while waiting/exchanging, every
 30 seconds with an idle setup dialog open, and stops when setup is closed and no
@@ -330,6 +336,12 @@ drafts. An account API 401 opens setup and directs the user to reconnect.
 - Browser QA uses a separate data/download root and fake account, checks desktop
   and mobile layouts, queue/pause/search, local playback, archive links, and a
   moved folder. Screenshots are temporary and removed after verification.
+- To run the rendering regression from the repo root, open a browser with
+  `playwright-cli open about:blank`, then run
+  `playwright-cli run-code --filename tests/frontend/rendering.browser.js`
+  and `playwright-cli close`. This test serves the shipped assets and fixture
+  API responses directly in Chromium. It checks DOM identity, scroll, focus,
+  and thumbnail recovery across real polling and user interactions.
 - Runtime logs are rotated at 2 MB with three backups. SQLite, downloads,
   cookies, credentials, `.env`, logs, and browser artifacts are ignored by Git.
 

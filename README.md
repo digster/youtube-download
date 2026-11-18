@@ -264,6 +264,8 @@ retrying a job also refresh immediately. Slow requests never overlap, and an
 unreachable server is retried at 30-second intervals. Background jobs keep
 running independently of the browser. Each visible tab has its own timer;
 changes made elsewhere appear on the next refresh or when returning to the tab.
+Progress updates in place, so you can keep scrolling, selecting playlists, or
+reading an expanded video error while a download or metadata update runs.
 
 ### Create a custom playlist from video URLs
 
