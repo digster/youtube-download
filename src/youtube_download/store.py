@@ -1,7 +1,7 @@
 """SQLite owns job intent; yt-dlp owns partial files. Every update is transactional."""
 
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import secrets
@@ -11,6 +11,16 @@ from uuid import uuid4
 
 from .config import VIDEO_ID, contained_file
 from .filenames import safe_stem
+
+# Archive responses belong to a YouTube ID, while download selections belong
+# to a playlist membership. Share results across all copies of the same video.
+VIDEO_QUERY = """SELECT v.*, CASE WHEN :compact AND v.id != :review
+                        THEN COALESCE(a.summary, a.result) ELSE a.result END AS archive_result,
+                        a.checked_at AS archive_checked,
+                        a.requested_at IS NOT NULL AS archive_pending
+                 FROM videos v LEFT JOIN archive_checks a ON a.video_id=v.id"""
+SAVE_FINDER_DEADLINE = """INSERT INTO finder_throttle(id,next_request) VALUES(1,?)
+    ON CONFLICT(id) DO UPDATE SET next_request=MAX(next_request,excluded.next_request)"""
 
 
 def now() -> str:
@@ -43,6 +53,16 @@ class Store:
                     PRIMARY KEY (playlist_id, id)
                 );
                 CREATE INDEX IF NOT EXISTS video_status ON videos(playlist_id, status);
+                CREATE INDEX IF NOT EXISTS video_membership ON videos(id, in_playlist);
+                CREATE TABLE IF NOT EXISTS archive_checks (
+                    video_id TEXT PRIMARY KEY, requested_at TEXT, checked_at TEXT, result TEXT,
+                    summary TEXT
+                );
+                CREATE INDEX IF NOT EXISTS pending_archives ON archive_checks(requested_at)
+                    WHERE requested_at IS NOT NULL;
+                CREATE TABLE IF NOT EXISTS finder_throttle (
+                    id INTEGER PRIMARY KEY CHECK(id=1), next_request REAL NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS metadata_jobs (
                     playlist_id TEXT PRIMARY KEY REFERENCES playlists(id),
                     state TEXT NOT NULL, queued_at TEXT, current_video TEXT,
@@ -67,6 +87,16 @@ class Store:
             }.items():
                 if name not in video_columns:
                     db.execute(f"ALTER TABLE videos ADD COLUMN {name} {definition}")
+            archive_columns = {
+                row[1] for row in db.execute("PRAGMA table_info(archive_checks)")
+            }
+            if "summary" not in archive_columns:
+                db.execute("ALTER TABLE archive_checks ADD COLUMN summary TEXT")
+            # Older libraries stored Finder results per membership. Prefer the
+            # most recent copy when seeding the shared cache on upgrade.
+            db.execute("""INSERT OR IGNORE INTO archive_checks(video_id, checked_at, result)
+                          SELECT id, recovery_checked_at, recovery FROM videos
+                          WHERE recovery IS NOT NULL ORDER BY recovery_checked_at DESC""")
 
     def playlist_directory(self, playlist_id: str) -> Path:
         playlist = self.playlist(playlist_id)
@@ -170,12 +200,16 @@ class Store:
                     for position, value in enumerate(ids)
                 ],
             )
+            self._queue_archives(db, playlist_id)
         return playlist_id
 
     def sync_videos(self, playlist_id: str, videos: list[dict]):
         # Fetch the entire remote snapshot before this transaction: a failed API page
         # must never mark the remaining local videos as removed.
         with self.connect() as db:
+            previous = db.execute(
+                "SELECT items_synced_at FROM playlists WHERE id=?", (playlist_id,)
+            ).fetchone()
             db.execute(
                 "UPDATE videos SET in_playlist=0 WHERE playlist_id=?", (playlist_id,)
             )
@@ -210,6 +244,17 @@ class Store:
                 "UPDATE playlists SET items_synced_at=?, item_count=? WHERE id=?",
                 (now(), len(videos), playlist_id),
             )
+            self._queue_archives(
+                db, playlist_id, refresh=bool(previous["items_synced_at"])
+            )
+            # Drop obsolete work when a refresh removes the last current
+            # membership. Keep cached links available on the retained row.
+            db.execute(
+                """UPDATE archive_checks SET requested_at=NULL WHERE requested_at IS NOT NULL
+                AND video_id IN (SELECT id FROM videos WHERE playlist_id=? AND in_playlist=0)
+                AND NOT EXISTS (SELECT 1 FROM videos WHERE id=video_id AND in_playlist=1)""",
+                (playlist_id,),
+            )
 
     def playlist(self, playlist_id: str) -> dict | None:
         with self.connect() as db:
@@ -226,7 +271,9 @@ class Store:
         return [self.playlist_summary(dict(row)) for row in rows]
 
     def playlist_summary(self, row: dict, videos: list[dict] | None = None) -> dict:
-        videos = self.videos(row["id"]) if videos is None else videos
+        videos = (
+            self.videos(row["id"], compact_archives=True) if videos is None else videos
+        )
         current = [v for v in videos if v["in_playlist"]]
         remaining = [v for v in current if not v["local_available"]]
         return {
@@ -239,6 +286,7 @@ class Store:
             "local_count": sum(v["local_available"] for v in videos),
             "total": len(current) if row["items_synced_at"] else row["item_count"],
             "skipped": sum(v["download_skipped"] for v in remaining),
+            "archive_pending": sum(v["archive_pending"] for v in current),
             "unavailable": sum(
                 v["status"] == "unavailable" and not v["download_skipped"]
                 for v in remaining
@@ -255,11 +303,18 @@ class Store:
             },
         }
 
-    def videos(self, playlist_id: str) -> list[dict]:
+    def videos(
+        self, playlist_id: str, *, compact_archives=False, review_video=""
+    ) -> list[dict]:
         with self.connect() as db:
             rows = db.execute(
-                "SELECT * FROM videos WHERE playlist_id=? ORDER BY in_playlist DESC, position, id",
-                (playlist_id,),
+                VIDEO_QUERY
+                + " WHERE v.playlist_id=:playlist ORDER BY v.in_playlist DESC, v.position, v.id",
+                {
+                    "compact": compact_archives,
+                    "review": review_video,
+                    "playlist": playlist_id,
+                },
             ).fetchall()
         directory = self.playlist_directory(playlist_id)
         return [self._video_view(row, directory) for row in rows]
@@ -287,14 +342,19 @@ class Store:
         )
         if item["status"] == "downloaded" and not item["local_available"]:
             item["status"] = "missing"
-        item["recovery"] = json.loads(item["recovery"]) if item["recovery"] else None
+        recovery = item.pop("archive_result") or item["recovery"]
+        item["recovery"] = json.loads(recovery) if recovery else None
+        item["recovery_checked_at"] = (
+            item.pop("archive_checked") or item["recovery_checked_at"]
+        )
+        item["archive_pending"] = bool(item["archive_pending"])
         return item
 
     def video(self, playlist_id: str, video_id: str) -> dict | None:
         with self.connect() as db:
             row = db.execute(
-                "SELECT * FROM videos WHERE playlist_id=? AND id=?",
-                (playlist_id, video_id),
+                VIDEO_QUERY + " WHERE v.playlist_id=:playlist AND v.id=:review",
+                {"compact": False, "review": video_id, "playlist": playlist_id},
             ).fetchone()
         return (
             self._video_view(row, self.playlist_directory(playlist_id)) if row else None
@@ -383,10 +443,110 @@ class Store:
             dict(row) if row else {"state": "idle", "error": "", "current_video": None}
         )
 
+    @staticmethod
+    def _queue_archives(db, playlist_id, *, refresh=False, missing_only=False):
+        # Membership and lookup intent are committed together. Multiple lists
+        # requesting the same ID share one outstanding request, even on refresh.
+        query = """INSERT INTO archive_checks(video_id,requested_at)
+                   SELECT id,:requested FROM videos WHERE playlist_id=:playlist AND in_playlist=1
+                   ORDER BY position,id ON CONFLICT(video_id) """
+        conflict = (
+            "DO NOTHING"
+            if missing_only
+            else """
+            DO UPDATE SET requested_at=excluded.requested_at WHERE requested_at IS NULL AND
+            (:refresh OR checked_at IS NULL OR checked_at < :cutoff OR json_extract(result,'$.error') IS NOT NULL)"""
+        )
+        db.execute(
+            query + conflict,
+            {
+                "playlist": playlist_id,
+                "requested": now(),
+                "refresh": refresh,
+                "cutoff": (datetime.now(timezone.utc) - timedelta(days=7)).isoformat(),
+            },
+        )
+
+    def queue_missing_archives(self, playlist_id):
+        # Also covers a download resumed from a pre-archive-queue database.
+        with self.connect() as db:
+            self._queue_archives(db, playlist_id, missing_only=True)
+
+    def next_archive_id(self):
+        with self.connect() as db:
+            row = db.execute("""SELECT video_id FROM archive_checks WHERE requested_at IS NOT NULL
+                ORDER BY requested_at, rowid LIMIT 1""").fetchone()
+        return row["video_id"] if row else None
+
+    def queue_archive_check(self, video_id):
+        with self.connect() as db:
+            db.execute(
+                """INSERT INTO archive_checks(video_id, requested_at) VALUES(?,?)
+                ON CONFLICT(video_id) DO UPDATE SET requested_at=excluded.requested_at
+                WHERE requested_at IS NULL""",
+                (video_id, now()),
+            )
+
+    def pending_archives(self, playlist_id, video_id=None):
+        query = """SELECT 1 FROM videos v JOIN archive_checks a ON a.video_id=v.id
+                   WHERE v.playlist_id=? AND v.in_playlist=1 AND a.requested_at IS NOT NULL"""
+        with self.connect() as db:
+            if video_id is None:
+                return (
+                    db.execute(query + " LIMIT 1", (playlist_id,)).fetchone()
+                    is not None
+                )
+            return (
+                db.execute(query + " AND v.id=?", (playlist_id, video_id)).fetchone()
+                is not None
+            )
+
+    def archive_check(self, video_id):
+        with self.connect() as db:
+            return db.execute(
+                "SELECT * FROM archive_checks WHERE video_id=?", (video_id,)
+            ).fetchone()
+
+    def finder_next_request(self):
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT next_request FROM finder_throttle WHERE id=1"
+            ).fetchone()
+        return row[0] if row else 0
+
+    def reserve_finder_request(self, deadline):
+        # A hard shutdown during HTTP still leaves a minimum gap before a
+        # restarted worker may issue another request.
+        with self.connect() as db:
+            db.execute(SAVE_FINDER_DEADLINE, (deadline,))
+
+    def finish_archive_check(self, video_id, result, next_request):
+        # Persist the cooldown with the response, including after a 429. A
+        # server restart can resume the queue without resetting Retry-After.
+        # Large lists poll for progress. Send the link count with each row and
+        # the full payload only for the video whose results are being reviewed.
+        summary = {
+            "link_count": sum(
+                link["kind"] != "original" and link["service"].casefold() != "youtube"
+                for link in result["links"]
+            ),
+            "partial": bool(result["service_errors"]),
+            "error": result["error"],
+        }
+        with self.connect() as db:
+            db.execute(
+                """INSERT INTO archive_checks(video_id,result,summary,checked_at) VALUES(?,?,?,?)
+                ON CONFLICT(video_id) DO UPDATE SET result=excluded.result,
+                summary=excluded.summary,checked_at=excluded.checked_at,requested_at=NULL""",
+                (video_id, json.dumps(result), json.dumps(summary), now()),
+            )
+            db.execute(SAVE_FINDER_DEADLINE, (next_request,))
+
     def queue_metadata(self, playlist_id: str, resume: bool = False):
         # The metadata ledger is independent of download status. Restarting a
         # lookup clears only its progress/errors, never known titles or media.
         with self.connect() as db:
+            self._queue_archives(db, playlist_id, refresh=not resume)
             db.execute(
                 "UPDATE videos SET metadata_status='pending', metadata_error='' "
                 "WHERE playlist_id=? AND in_playlist=1 "

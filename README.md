@@ -26,7 +26,7 @@ required. Supported platforms: macOS and Linux.
   videos, play compatible formats, and save files for an external player.
 - Change a playlist's folder after moving it, recheck existing files, and use the
   new location for future downloads.
-- Find metadata and archive URLs for unavailable videos through
+- Review archive links for every playlist video before choosing downloads through
   [TheTechRobo/youtubevideofinder](https://github.com/TheTechRobo/youtubevideofinder/).
 - Keep local videos and previously known metadata when videos disappear from the
   remote playlist. Syncing never deletes media.
@@ -248,8 +248,8 @@ playlists continue to download one video at a time.
 4. Open **View library** to inspect video statuses and play local files. Browsers
    do not support every yt-dlp codec/container; use **Save video file** and an
    external player when necessary.
-5. For missing videos, open **Archive links / Find archives**. Links are also
-   fetched automatically when a queued video is identified as unavailable.
+5. Open **Archive links** on a row to inspect Finder's individual links. Use the
+   **Archive links** filter to show videos with results from an archive service.
 
 Each video in the playlist has a download checkbox. Clear it to skip that
 video or check it to include it again. **Include all videos for download**
@@ -265,7 +265,7 @@ library page. Every video has a **YouTube ↗** link alongside its local playbac
 or archive actions. These links open YouTube in a new tab; unavailable videos
 may still be unavailable there.
 
-The library refreshes every **2 seconds during queued/running downloads or
+The library refreshes every **2 seconds during downloads, archive checks or
 metadata updates**, and every **30 seconds while idle**. These reads use local
 library data and do not consume YouTube API quota. Hidden tabs stop polling;
 returning to a tab refreshes immediately. Actions such as starting, pausing, or
@@ -367,14 +367,27 @@ global download directory does not relocate existing media.
 
 ### Archive lookup
 
-The adapter calls the upstream project's documented
-[`GET /api/v5/:videoid`](https://findyoutubevideo.thetechrobo.ca/api). It stores
-safe HTTP(S) URLs, source names, and metadata/video labels in SQLite. Successful
-lookups are cached for seven days; failed requests can be retried. Some archive
-services may fail independently. A result can contain metadata without a
-recoverable video; archive links are not downloaded automatically. These
-requests send the video ID to the configured finder service. Use
-`YTDL_FINDER_URL` for your own deployment of the upstream repository.
+Creating a custom playlist or fetching a YouTube playlist's videos queues an
+archive check for each video, including unchecked and already saved videos.
+Checks continue with the tab closed. If you queue a download during the scan,
+the playlist waits for the checks to finish. A Finder error is recorded on the
+row and the queue continues. Use **Refresh videos** on a synced playlist or
+**Update metadata** on a custom playlist to request fresh results. Archive
+checks run independently of custom title and thumbnail updates.
+
+Open a row's archive results to inspect each source, destination, and reported
+contents, including video, audio and metadata. The original YouTube links have
+their own label. You decide which download checkboxes to clear. **Recheck
+archives** refreshes one video. A failed refresh keeps previously saved links.
+
+Shelf sends the video ID to the configured Finder service. It makes one
+request at a time and waits at least five seconds after each response before
+sending another, including redirects and manual rechecks. Rate limits and
+temporary service outages honor `Retry-After`, with a one-minute fallback
+for HTTP 429 or 503. The cooldown and pending checks survive a restart.
+Playlists share cached results by video ID for seven days. Opening saved
+links in Shelf reads the local cache. Set `YTDL_FINDER_URL` to use a self-hosted
+instance. [Finder API documentation](https://findyoutubevideo.thetechrobo.ca/api)
 
 ## Configuration
 

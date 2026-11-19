@@ -77,3 +77,6 @@
 - Create searchable title files exclusively inside the recorded video's
   directory. A previous marker may contain user notes, and an external drive
   may have disappeared between the library read and the filesystem write.
+- Finder includes the original YouTube watch page in its results, often with
+  the video flag set. Keep the service identity and per-link content flags when
+  labeling archive results. Rate-limit each HTTP hop, including redirects.

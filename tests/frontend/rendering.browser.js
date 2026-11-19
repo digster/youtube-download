@@ -43,13 +43,30 @@ async function testLibraryRendering(page) {
   }));
   let failedImages = 0;
   let rejectNextSelection = false;
+  let archiveRequests = 0;
+  const archiveResult = {
+    links: [
+      {kind: "video", service: "Wayback Machine", title: "Captured video", url: "https://web.archive.org/video", note: "Capture may have no sound"},
+      {kind: "metadata", service: "Ghostarchive", title: "Captured page", url: "https://ghostarchive.org/page"},
+      {kind: "original", service: "YouTube", title: "Watch page", url: "https://youtu.be/01234567890"},
+    ],
+    service_errors: ["Test archive"], error: null,
+  };
   await page.route(origin + "/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === "/api/status") return route.fulfill({ json: { login: {} } });
     if (path === "/api/playlists")
       return route.fulfill({ json: { playlists } });
-    if (path === "/api/playlists/active")
-      return route.fulfill({ json: { playlist, videos } });
+    if (path === "/api/playlists/active") {
+      const review = new URL(route.request().url()).searchParams.get("review_video");
+      return route.fulfill({ json: { playlist, videos: videos.map((v) =>
+        v.id === review && v.recovery ? {...v, recovery: archiveResult} : v
+      ) } });
+    }
+    if (path.endsWith("/find")) {
+      archiveRequests++;
+      return route.fulfill({ json: { queued: true } });
+    }
     if (path.endsWith("/skip") && route.request().method() === "POST") {
       if (rejectNextSelection) {
         rejectNextSelection = false;
@@ -312,6 +329,23 @@ async function testLibraryRendering(page) {
   await page.getByText("Selection could not be saved.").waitFor();
   await page.waitForFunction(() => !document.querySelector("#include-all").disabled);
   check(await all.isChecked() && await firstChoice.isChecked(), "A rejected change left checkboxes out of sync");
+  videos[0].recovery = {link_count: 2, partial: true, error: null};
+  videos[0].local_available = true;
+  await page.clock.runFor(2000);
+  await page.getByRole("button", { name: "Archive links", exact: true }).click();
+  await page.getByRole("button", { name: "Play" }).waitFor();
+  check(await page.locator(".video-row").count() === 1, "Archive filter missed a saved video");
+  await page.getByRole("button", { name: "Archive links (2)" }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByText("Wayback Machine · Captured video", {exact: false}).waitFor();
+  check(await dialog.locator(".recovery-link").count() === 3, "Finder links were omitted");
+  await dialog.getByText("Original YouTube", {exact: true}).waitFor();
+  await dialog.getByText("Capture may have no sound", {exact: true}).waitFor();
+  await dialog.getByText("Services that could not be checked · Test archive").waitFor();
+  check(archiveRequests === 0, "Viewing saved results issued a Finder request");
+  await dialog.getByRole("button", { name: "Recheck archives" }).click();
+  await dialog.getByRole("button", { name: "Close archive results" }).click();
+  check(archiveRequests === 1 && await firstChoice.isChecked(), "Archive recheck changed download selection");
   check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "Checkboxes overflowed the viewport");
   return "Playlist rendering and individual, mixed and bulk download selection passed.";
 }

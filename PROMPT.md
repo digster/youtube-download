@@ -165,3 +165,13 @@ Attached screenshot shows video-ID folders containing media and metadata named b
 Also do the commits for me.
 
 Actually make it a checkbox for all the videos and have the top checkbox to enable or disable all.
+
+## 2026-11-19 — Playlist archive checks before download
+
+- Fetch the response from [https://github.com/TheTechRobo/youtubevideofinder/](https://github.com/TheTechRobo/youtubevideofinder/) for each video once a list is fetched or created(before they are downloaded). This way we can skip videos if they're already part of any archive site. Refreshing metadata should also update this step.
+
+Do not do anything, I will decide. Anyways, the response has multiple links which have to be judged individually.
+
+Make sure to do the commits for me and also make sure the site is not bombarded and there's a delay in every request.
+
+continue

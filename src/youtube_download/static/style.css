@@ -881,6 +881,7 @@ video {
   margin-bottom: 5px;
 }
 .recovery-link small {
+  display: block;
   color: var(--muted);
   line-height: 1.7;
 }

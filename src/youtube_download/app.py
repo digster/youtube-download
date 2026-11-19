@@ -79,6 +79,7 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
                 ) from exc
             cookies.cleanup_sessions()
             if start_worker:
+                finder.start()
                 manager.start()
                 metadata.start()
             try:
@@ -87,6 +88,7 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
                 login.cancel()
                 metadata.close()
                 manager.close()
+                finder.close()
                 fcntl.flock(lock_file, fcntl.LOCK_UN)
 
     app = FastAPI(
@@ -316,6 +318,7 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         logger.info("Created custom playlist %s with %d videos", playlist_id, len(ids))
+        finder.wake.set()
         return playlist_detail(playlist_id)
 
     @app.post("/api/sync")
@@ -325,9 +328,9 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
         return {"playlists": store.playlists()}
 
     @app.get("/api/playlists/{playlist_id}")
-    def playlist_detail(playlist_id: str):
+    def playlist_detail(playlist_id: str, compact_archives: bool = False, review_video: str = ""):
         row = require_playlist(playlist_id)
-        videos = store.videos(playlist_id)
+        videos = store.videos(playlist_id, compact_archives=compact_archives, review_video=review_video)
         return {"playlist": store.playlist_summary(row, videos), "videos": videos}
 
     @app.post("/api/playlists/{playlist_id}/refresh")
@@ -345,6 +348,7 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
                 )
             videos = account_call(account.videos, playlist_id)
             store.sync_videos(playlist_id, videos)
+            finder.wake.set()
         return playlist_detail(playlist_id)
 
     def metadata_action(playlist_id, action):
@@ -357,6 +361,7 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
                     metadata.cancel(playlist_id)
                 else:
                     metadata.enqueue(playlist_id, resume=action == "resume")
+                    finder.wake.set()
             except ValueError as exc:
                 raise HTTPException(409, str(exc)) from exc
         return playlist_detail(playlist_id)
@@ -450,8 +455,12 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
         return {"skipped": update.skipped}
 
     @app.post("/api/playlists/{playlist_id}/videos/{video_id}/find")
-    def find(playlist_id: str, video_id: str):
+    def find(playlist_id: str, video_id: str, queue: bool = False):
         require_video(playlist_id, video_id)
+        if queue:
+            store.queue_archive_check(video_id)
+            finder.wake.set()
+            return {"queued": True}
         return finder.lookup(playlist_id, video_id)
 
     @app.get("/api/playlists/{playlist_id}/videos/{video_id}/file")

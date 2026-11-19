@@ -4,8 +4,8 @@
 
 Shelf is a local FastAPI server with a buildless HTML/CSS/JavaScript client.
 SQLite persists metadata and job intent, while yt-dlp owns transfer and merge
-details. There is one background download worker and one independent metadata
-worker per data directory. Runtime files are deliberately separate from
+details. Each data directory has independent download, metadata and archive
+workers. Runtime files are deliberately separate from
 versioned source.
 
 ```text
@@ -144,10 +144,28 @@ yt-dlp metadata for an ID placeholder. It performs no network requests and
 missing drives or unwritable title files leave transfer state intact.
 
 Failures such as HTTP 429, network errors, or bot challenges remain retryable
-`failed` states. Explicit private/deleted/unavailable errors trigger archive
-lookup. Known deleted/private entries in an API snapshot are also looked up
-when the playlist runs. Remaining videos continue. Retrying does not
-automatically refresh remote playlist contents; that is a separate action.
+`failed` states. Each playlist waits for its archive scan before transferring
+media. If a metadata refresh starts during a download, the next video's
+transfer waits for that video's new check. Only the user's checkbox determines
+whether an otherwise eligible video is skipped.
+
+## Archive checks
+
+`archive_checks` stores one pending request and cached result per YouTube ID.
+The store queues checks in the same transaction as custom creation, membership
+sync or metadata refresh. Concurrent playlists share requests and results.
+Existing libraries retain saved links and acquire missing checks on download.
+The Finder worker drains outstanding IDs in request order. Each result includes
+individual URLs, source, content flags, notes and partial service errors.
+The compact library view reads a stored count and fetches full links for the
+open dialog. Both views come from SQLite.
+
+The background scan and manual lookups share a lock and a persisted
+`finder_throttle` deadline. Finder reserves a request slot before HTTP and
+extends the deadline after each response. The minimum gap is five seconds.
+Redirect hops pass through the same gate. HTTP 429/503 use the server's
+`Retry-After` or a sixty-second fallback. The UI queues an individual recheck
+through the existing `/find?queue=true` POST.
 
 ## Custom playlist metadata updates
 
@@ -306,7 +324,7 @@ result count. API snapshots remain complete so queue and metadata semantics are
 unchanged.
 `static/polling.js` loads before `app.js` and owns `AdaptivePoller`, a completion-
 scheduled timeout with one in-flight read per instance. Library snapshots use a
-2-second delay when any displayed playlist has a queued/running media or metadata
+2-second delay when any displayed playlist has pending archive checks or an active media or metadata
 job, otherwise 30 seconds (including paused/failed jobs). Overview checks all
 saved playlists before filtering; detail pages check their own playlist. Failed
 reads use a 30-second delay even if the saved state is active. User actions

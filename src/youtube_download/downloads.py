@@ -198,7 +198,7 @@ class DownloadManager:
     def _finish_playlist(self, playlist_id):
         remaining = [
             v
-            for v in self.store.videos(playlist_id)
+            for v in self.store.videos(playlist_id, compact_archives=True)
             if v["in_playlist"]
             and not v["local_available"]
             and not v["download_skipped"]
@@ -326,8 +326,14 @@ class DownloadManager:
 
     def _download_playlist(self, playlist_id):
         logger.info("Downloading playlist %s", playlist_id)
-        for video in self.store.videos(playlist_id):
-            if self._interrupted(playlist_id):
+
+        def interrupted():
+            return self._interrupted(playlist_id)
+
+        if not self.finder.wait_for_checks(playlist_id, interrupted):
+            return
+        for video in self.store.videos(playlist_id, compact_archives=True):
+            if interrupted():
                 return
             if not video["in_playlist"] or video["local_available"]:
                 continue
@@ -346,8 +352,13 @@ class DownloadManager:
                 continue
             if video["availability"] == "unavailable":
                 self.store.update_video(playlist_id, video["id"], status="unavailable")
-                self.finder.lookup(playlist_id, video["id"])
+                if not video["recovery"]:
+                    self.finder.lookup(playlist_id, video["id"])
                 continue
+            # A metadata refresh can queue another scan during a long transfer.
+            # Let the active transfer finish, then observe the new check here.
+            if not self.finder.wait_for_checks(playlist_id, interrupted, video["id"]):
+                return
             self._download_video(playlist_id, video["id"])
         with self.lock:
             if not self._interrupted(playlist_id):
@@ -444,5 +455,7 @@ class DownloadManager:
             status = error_status(error)
             self.store.update_video(playlist_id, video_id, status=status, error=error)
             logger.warning("Download %s for video %s", status, video_id)
-            if status == "unavailable":
+            if status == "unavailable" and not self.store.video(playlist_id, video_id)[
+                "recovery"
+            ]:
                 self.finder.lookup(playlist_id, video_id)

@@ -39,6 +39,7 @@ const state = {
   creatingPlaylist: false,
   videoPage: 0,
   pendingInclusion: null,
+  archiveVideo: null,
 };
 const labels = {
   idle: "Not started",
@@ -65,6 +66,7 @@ const bytes = (value) => {
   return `${(value / 1024 ** i).toFixed(i > 1 ? 1 : 0)} ${units[i]}`;
 };
 const active = (p) => ["queued", "running"].includes(p.state);
+const waitingForArchives = (p) => active(p) && p.archive_pending > 0 && !p.current_video;
 const processedVideos = (p) => p.downloaded + (p.skipped || 0);
 const videoNeedsAttention = (v) =>
   !v.local_available &&
@@ -79,9 +81,9 @@ const apiPath = (id = playlistId) => `/api/playlists/${encodeURIComponent(id)}`;
 
 const libraryPoller = new AdaptivePoller(fetchLibrary, () => {
   const playlists = playlistId ? [state.playlist] : state.playlists;
-  return playlists.some(
+  return (playlistId && state.videos.some((video) => video.archive_pending)) || playlists.some(
     (p) =>
-      p && (active(p) || ["queued", "running"].includes(p.metadata?.state)),
+      p && (p.archive_pending || active(p) || ["queued", "running"].includes(p.metadata?.state)),
   )
     ? ACTIVE_POLL_MS
     : IDLE_POLL_MS;
@@ -246,6 +248,7 @@ function renderFilters() {
         ["all", "All videos"],
         ["downloaded", "On disk"],
         ["skipped", "Skipped"],
+        ["archives", "Archive links"],
         ["attention", "Needs attention"],
       ]
     : [
@@ -309,7 +312,7 @@ function renderPlaylistCard(card, p) {
   );
   setMarkup(
     card.querySelector(".status-line"),
-    `${badge(p.state)}<span>${p.downloaded} of ${p.total} saved${p.skipped ? ` · ${p.skipped} skipped` : ""}</span>`,
+    `${waitingForArchives(p) ? '<span class="badge">Checking archives</span>' : badge(p.state)}<span>${p.downloaded} of ${p.total} saved${p.skipped ? ` · ${p.skipped} skipped` : ""}</span>`,
   );
   const progress = card.querySelector("progress");
   const percent = p.total
@@ -396,7 +399,7 @@ function renderMetadataPanel(p) {
   };
   const description =
     job.state === "idle"
-      ? "Fetch titles, channels, and thumbnails before downloading. Uses your saved cookie source for videos that need sign-in."
+      ? "Update video titles, channels, thumbnails and archive checks. YouTube lookups use your saved cookie source for videos that need sign-in."
       : `${checked} of ${job.total} checked · ${job.updated} updated${job.failed ? ` · ${job.failed} failed` : ""}. ${running ? "You can leave this page; the update continues." : "Existing details are kept when a lookup fails."}`;
   setMarkup(
     container,
@@ -426,6 +429,25 @@ function renderMetadataPanel(p) {
   const error = container.querySelector(".auth-error");
   setHidden(error, !job.error);
   setText(error, job.error || "");
+}
+
+function originalSource(link) {
+  return link.kind === "original" || link.service?.toLowerCase() === "youtube";
+}
+
+function archiveLinkCount(v) {
+  return v.recovery?.link_count ?? v.recovery?.links?.filter((link) => !originalSource(link)).length ?? 0;
+}
+
+function finderButton(v) {
+  const count = archiveLinkCount(v);
+  let label = "Find archives";
+  if (v.archive_pending && !v.recovery) label = "Archive check queued";
+  else if (v.recovery?.error) label = "Archive check failed";
+  else if (count) label = `Archive links (${count})`;
+  else if (v.recovery?.partial || v.recovery?.service_errors?.length) label = "Partial archive results";
+  else if (v.recovery) label = "No archive links";
+  return `<button class="button secondary small" data-action="find" data-video="${escapeHTML(v.id)}">${escapeHTML(label)}</button>`;
 }
 
 function renderVideoRow(row, v) {
@@ -460,7 +482,7 @@ function renderVideoRow(row, v) {
   const id = escapeHTML(v.id);
   setMarkup(
     row.querySelector(".video-actions"),
-    `${badge(status)}${v.local_available ? `<button class="button secondary small" data-action="play" data-video="${id}">▷ Play</button>` : ["unavailable", "failed"].includes(v.status) ? `<button class="button secondary small" data-action="find" data-video="${id}">${v.recovery ? "Archive links ↗" : "Find archives ↗"}</button>` : ""}<a class="button quiet small" target="_blank" rel="noopener noreferrer" href="https://www.youtube.com/watch?v=${encodeURIComponent(v.id)}" aria-label="Open ${escapeHTML(v.title)} on YouTube (new tab)">YouTube ↗</a>`,
+    `${badge(status)}${v.local_available ? `<button class="button secondary small" data-action="play" data-video="${id}">▷ Play</button>` : ""}${finderButton(v)}<a class="button quiet small" target="_blank" rel="noopener noreferrer" href="https://www.youtube.com/watch?v=${encodeURIComponent(v.id)}" aria-label="Open ${escapeHTML(v.title)} on YouTube (new tab)">YouTube ↗</a>`,
   );
 }
 
@@ -518,7 +540,7 @@ function renderDetail() {
   setText($("#collection-title"), "Playlist library");
   setText(
     $("#collection-description"),
-    `${labels[p.state] || p.state}${p.current_video ? ` · Current video ${Math.round(p.progress)}%` : ""}${p.skipped ? ` · ${p.skipped} skipped` : ""}`,
+    `${waitingForArchives(p) ? "Waiting for archive checks" : labels[p.state] || p.state}${p.current_video ? ` · Current video ${Math.round(p.progress)}%` : ""}${p.skipped ? ` · ${p.skipped} skipped` : ""}${p.archive_pending ? ` · ${p.archive_pending} archive checks remaining` : ""}`,
   );
   const shown = state.videos.filter(
     (v) =>
@@ -528,6 +550,7 @@ function renderDetail() {
       (state.filter === "all" ||
         (state.filter === "downloaded" && v.local_available) ||
         (state.filter === "skipped" && v.in_playlist && v.download_skipped) ||
+        (state.filter === "archives" && archiveLinkCount(v) > 0) ||
         (state.filter === "attention" && videoNeedsAttention(v))),
   );
   setMarkup(
@@ -563,6 +586,7 @@ function renderDetail() {
   const visibleVideos = p.items_synced_at ? pageVideos : [];
   renderItems(visibleVideos, "video-list", renderVideoRow);
   renderDownloadSelection(visibleVideos);
+  if ($("#recovery-dialog").open) renderArchiveResults();
 }
 
 function render() {
@@ -602,7 +626,8 @@ function updateSelection(visible) {
 
 async function fetchLibrary(force = false) {
   try {
-    const data = await api(playlistId ? apiPath() : "/api/playlists");
+    const review = state.archiveVideo ? `&review_video=${encodeURIComponent(state.archiveVideo)}` : "";
+    const data = await api(playlistId ? `${apiPath()}?compact_archives=true${review}` : "/api/playlists");
     const signature = JSON.stringify(data);
     if (force || signature !== state.signature) {
       if (playlistId) {
@@ -907,19 +932,56 @@ async function chooseGoogleClient(input) {
   }
 }
 
-async function findArchives(videoId) {
-  const video = state.videos.find((v) => v.id === videoId);
-  $("#recovery-title").textContent = video.title;
-  $("#recovery-content").innerHTML =
-    '<p>Searching archive services with YouTube Video Finder…</p><p class="muted">This may take up to 30 seconds.</p>';
-  $("#recovery-dialog").showModal();
+function archiveLink(link) {
+  const url = safeURL(link.url);
+  if (!url) return "";
+  const kinds = { video: "Video", audio: "Audio", metadata: "Metadata / other" };
+  const kind = originalSource(link) ? "Original YouTube" : kinds[link.kind] || "Archive";
+  const contents = (link.contents || []).map((key) => key.replaceAll("_", " ")).join(", ");
+  return `<a class="recovery-link" href="${url}" target="_blank" rel="noopener noreferrer">
+    <span class="badge">${escapeHTML(kind)}</span>
+    <strong>${escapeHTML(link.service)} · ${escapeHTML(link.title)} ↗</strong>
+    <small>${escapeHTML(link.url)}</small>
+    ${contents ? `<small>Reported contents · ${escapeHTML(contents)}</small>` : ""}
+    ${link.note ? `<small>${escapeHTML(link.note)}</small>` : ""}
+  </a>`;
+}
+
+function renderArchiveResults() {
+  const video = state.videos.find((v) => v.id === state.archiveVideo);
+  if (!video) return;
+  setText($("#recovery-title"), video.title);
+  const result = video.recovery;
+  if (result && !result.links) {
+    setMarkup($("#recovery-content"), '<p role="status">Loading saved links…</p>');
+    return;
+  }
+  const errors = result?.service_errors || [];
+  const links = result?.links || [];
+  const pending = video.archive_pending;
+  const checked = video.recovery_checked_at
+    ? `Last checked ${new Date(video.recovery_checked_at).toLocaleString()}` : "";
+  setMarkup($("#recovery-content"), `
+    ${pending ? '<p role="status">Archive check queued. Results update here.</p>' : ""}
+    ${checked ? `<p class="muted">${escapeHTML(checked)}</p>` : ""}
+    ${result?.verdict && !result.error ? `<p>${escapeHTML(result.verdict)}</p>` : ""}
+    ${result?.error ? `<p role="alert">${escapeHTML(result.error)}${links.length ? " Showing previously saved links." : ""}</p>` : ""}
+    ${result && !result.error && !links.length ? "<p>Finder returned no links.</p>" : ""}
+    ${links.map(archiveLink).join("")}
+    ${errors.length ? `<p class="muted">Services that could not be checked · ${escapeHTML(errors.join(", "))}</p>` : ""}
+    ${!pending ? `<button class="button secondary small" data-action="recheck-archive" data-video="${escapeHTML(video.id)}">${result ? "Recheck archives" : "Check archives"}</button>` : ""}
+    <a class="external-link" href="https://findyoutubevideo.thetechrobo.ca/?q=${encodeURIComponent(video.id)}" target="_blank" rel="noopener noreferrer">Open YouTube Video Finder ↗</a>`);
+}
+
+async function queueArchiveCheck(button) {
+  button.disabled = true;
   try {
-    const result = await api(`${apiPath()}/videos/${videoId}/find`, "POST");
-    $("#recovery-content").innerHTML =
-      `<p>${escapeHTML(result.error || result.verdict || "Archive search complete.")}</p>${result.links.map((link) => `<a class="recovery-link" href="${safeURL(link.url)}" target="_blank" rel="noopener noreferrer"><span class="badge">${link.kind === "video" ? "Video archive" : "Metadata / archive"}</span><strong>${escapeHTML(link.title)} ↗</strong><small>${escapeHTML(link.service)}${link.note ? ` · ${escapeHTML(link.note)}` : ""}</small></a>`).join("")}${!result.links.length ? "<p>No archive URLs were returned. Unavailable videos may not have an archived copy.</p>" : ""}${result.service_errors?.length ? `<p class="muted">Some services could not be checked: ${escapeHTML(result.service_errors.join(", "))}.</p>` : ""}<p class="muted">Results are cached for seven days. Archive links may contain metadata only and are not downloaded automatically.</p><a class="external-link" href="https://findyoutubevideo.thetechrobo.ca/?q=${encodeURIComponent(videoId)}" target="_blank" rel="noopener noreferrer">Open YouTube Video Finder ↗</a>`;
+    await api(`${apiPath()}/videos/${encodeURIComponent(button.dataset.video)}/find?queue=true`, "POST");
     await reload(true);
   } catch (error) {
-    $("#recovery-content").textContent = error.message;
+    notice(error.message, true);
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -988,7 +1050,20 @@ document.addEventListener("click", async (event) => {
     return;
   }
   if (action === "find") {
-    await findArchives(button.dataset.video);
+    state.archiveVideo = button.dataset.video;
+    renderArchiveResults();
+    $("#recovery-dialog").showModal();
+    const video = state.videos.find((v) => v.id === state.archiveVideo);
+    if (!video.recovery && !video.archive_pending) await queueArchiveCheck(button);
+    else if (video.recovery && !video.recovery.links) {
+      await reload(true);
+      if (state.archiveVideo === video.id && libraryPoller.failed)
+        setMarkup($("#recovery-content"), "<p>Could not load saved links. Check the connection to Shelf and reopen the results.</p>");
+    }
+    return;
+  }
+  if (action === "recheck-archive") {
+    await queueArchiveCheck(button);
     return;
   }
   button.disabled = true;
@@ -1072,6 +1147,8 @@ async function saveDownloadSelection(input) {
       input.focus({ preventScroll: true });
   }
 }
+
+$("#recovery-dialog").addEventListener("close", () => { state.archiveVideo = null; });
 
 document.addEventListener("change", (event) => {
   const input = event.target;
