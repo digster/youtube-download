@@ -183,7 +183,7 @@ class Store:
         except OSError:
             return 0
         rows = db.execute(
-            "SELECT id,download_dir,folder_is_custom,state FROM playlists"
+            "SELECT id,title,download_dir,folder_is_custom,state FROM playlists"
         ).fetchall()
         reserved = {Path(row["download_dir"]) for row in rows}
         updated = 0
@@ -196,8 +196,18 @@ class Store:
                 continue
             old = Path(row["download_dir"])
             target = root / old.name
-            if target in reserved or not self._can_rebind_folder(old, target):
+            legacy_name = old.name == row["id"]
+            if target == old:
+                if not legacy_name:
+                    continue
+            elif target in reserved:
                 continue
+            if not self._can_rebind_folder(old, target):
+                continue
+            # A previous repair may already have set the right parent while
+            # retaining the YouTube ID. Allocate its readable name just once.
+            if legacy_name:
+                target = Path(self._new_playlist_directory(db, row["title"]))
             db.execute(
                 "UPDATE playlists SET download_dir=? WHERE id=?",
                 (str(target), row["id"]),
@@ -220,6 +230,8 @@ class Store:
                         return False
             except FileNotFoundError:
                 pass
+            if target == old:
+                return True  # The unused source itself is being given a new name.
             try:
                 target.lstat()
             except FileNotFoundError:
@@ -273,8 +285,8 @@ class Store:
                 )
 
     def _new_playlist_directory(self, db, title: str) -> str:
-        # Only allocate once. Renames and syncs must not detach .part files or
-        # downloaded media. Old rows with no override keep their legacy ID folder.
+        # Persist this allocation. A later title change must not detach .part
+        # files or downloaded media from the playlist.
         name = safe_stem(title, max_chars=100, max_bytes=180) or "Playlist"
         root = self._directory_override(db) or self.download_dir
         for _ in range(20):

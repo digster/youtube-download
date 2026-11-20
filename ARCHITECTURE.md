@@ -222,7 +222,10 @@ Startup runs the same check under the exclusive server lock before workers start
 so previously saved preferences take effect on upgrade. The library view refreshes
 immediately after a save or reset.
 
-`Store._apply_default_folder` preserves each basename, including legacy IDs.
+`Store._apply_default_folder` preserves previously allocated readable names.
+An unused automatic folder whose basename equals the playlist ID goes through
+the same allocator as a new playlist, even if it already has the correct parent.
+The saved result makes subsequent checks idempotent.
 It skips manual assignments (`folder_is_custom`), queued, running or stopping
 transfers, unavailable drives, nonempty or symlinked source folders, and
 destinations already reserved in SQLite or occupied on disk. This checks the

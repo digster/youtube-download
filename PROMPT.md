@@ -187,3 +187,11 @@ Attached screenshot shows the read-only folder under Where your videos live.
 All the old and new playlists are still showing the old directory despite me changing the default download directory. If there any fixes also do the commits for me.
 
 The screenshots show Animation pointing to the startup downloads directory and Account & setup showing the saved external volume.
+
+## 2026-11-20 — Restore readable watchlist folder names
+
+After the last change, why has the specific download directory for a watchlist again defaulted to a unique code. Previously we had decided "watch list name - a unique code". If there are any new changes, also do the commits for me.
+
+The screenshot shows a folder on the saved drive named only for the YouTube playlist ID.
+
+Restart Shelf and verify the live library.

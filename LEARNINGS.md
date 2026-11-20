@@ -84,3 +84,6 @@
   database values. Updating the default alone leaves already-synced playlists
   on the old drive. Track manual choices explicitly and check for partial files
   on disk before rebinding an unused automatic path.
+- Check the basename as well as the parent when repairing automatic paths.
+  Legacy rows can already point to the correct drive and still need their
+  first readable name. Later syncs should reuse that allocation.

@@ -332,7 +332,10 @@ inside the configured download directory, for example
 names shortened. The folder is saved when the playlist is created; later title
 changes keep that location so completed and partial files remain usable.
 
-Shelf preserves the playlist folder name, including older playlist-ID names.
+Older playlists may have a YouTube ID as their folder name. At startup, or
+when you save the default, Shelf gives unused, automatically assigned ID
+folders the same readable name format as new playlists. Once assigned, that
+name stays stable across syncs, restarts, and changes of the default drive.
 Playlists with completed or partial files, queued or running transfers, or a
 folder selected through **Change folder** keep their location. Shelf also
 keeps the old path if it cannot check the drive or the destination is already

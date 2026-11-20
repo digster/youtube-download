@@ -1,3 +1,4 @@
+import re
 import shutil
 from pathlib import Path
 from unittest.mock import Mock
@@ -152,18 +153,74 @@ def test_default_folder_repairs_previously_pinned_paths_on_upgrade(settings, tmp
         )
         db.execute("ALTER TABLE playlists DROP COLUMN folder_is_custom")
 
+    assigned = []
     for _ in range(2):
         reopened = create_app(settings, FakeAccount(), start_worker=False)
         with TestClient(reopened, base_url="http://127.0.0.1") as client:
-            assert client.get(BASE).json()["playlist"]["download_dir"] == str(
-                root / PID
-            )
+            directory = Path(client.get(BASE).json()["playlist"]["download_dir"])
+            assert directory.parent == root
+            assert re.fullmatch(r"My playlist - [a-f0-9]{6}", directory.name)
+            assigned.append(directory)
             assert (
                 reopened.state.store.playlist_directory("PLreadable")
                 == root / readable.name
             )
             assert reopened.state.store.playlist_directory("PLmanual") == manual
+    assert assigned[0] == assigned[1]
     assert list(root.iterdir()) == []
+
+
+def test_already_rebound_id_folder_gets_one_readable_name(
+    client, tmp_path, monkeypatch
+):
+    store = client.app.state.store
+    root = tmp_path / "Media"
+    root.mkdir()
+    endpoint = "/api/download-directory"
+    client.post(endpoint, json={"directory": str(root)}).raise_for_status()
+    # The previous repair saved the correct parent but kept the YouTube ID.
+    legacy = root / PID
+    legacy.mkdir()
+    store.update_playlist(PID, download_dir=str(legacy))
+    store.sync_playlists([playlist(title="Trips / 2026")])
+    (root / "Trips 2026 - aaaaaa").mkdir()
+    monkeypatch.setattr(
+        "youtube_download.store.secrets.token_hex",
+        Mock(side_effect=["aaaaaa", "bbbbbb"]),
+    )
+
+    result = client.post(endpoint, json={"directory": str(root)})
+    assert result.json()["updated_playlists"] == 1
+    expected = root / "Trips 2026 - bbbbbb"
+    assert client.get(BASE).json()["playlist"]["download_dir"] == str(expected)
+    store.sync_playlists([playlist(title="Renamed after repair")])
+    assert (
+        client.post(endpoint, json={"directory": str(root)}).json()["updated_playlists"]
+        == 0
+    )
+    assert store.playlist_directory(PID) == expected
+    assert not expected.exists()
+
+
+@pytest.mark.parametrize("protected", ["partial", "manual", "queued"])
+def test_id_folder_protections_apply_inside_current_default(
+    client, settings, protected
+):
+    store = client.app.state.store
+    legacy = settings.download_dir / PID
+    legacy.mkdir()
+    store.update_playlist(PID, download_dir=str(legacy))
+    if protected == "partial":
+        (legacy / "download.part").write_bytes(b"unfinished")
+    elif protected == "manual":
+        client.post(
+            f"{BASE}/folder", json={"directory": str(legacy)}
+        ).raise_for_status()
+    else:
+        client.post(f"{BASE}/download").raise_for_status()
+
+    assert client.post("/api/download-directory/reset").json()["updated_playlists"] == 0
+    assert store.playlist_directory(PID) == legacy
 
 
 def test_default_folder_preserves_partial_manual_and_conflicting_paths(
