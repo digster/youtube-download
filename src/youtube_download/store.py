@@ -1,6 +1,8 @@
 """SQLite owns job intent; yt-dlp owns partial files. Every update is transactional."""
 
 import json
+import os
+import re
 import secrets
 import sqlite3
 from contextlib import contextmanager
@@ -30,7 +32,7 @@ def now() -> str:
 class Store:
     def __init__(self, path: Path, download_dir: Path):
         self.path = path
-        self.download_dir = download_dir
+        self.download_dir = download_dir.resolve()
         path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as db:
             db.executescript("""
@@ -41,7 +43,8 @@ class Store:
                     item_count INTEGER DEFAULT 0, synced_at TEXT, items_synced_at TEXT,
                     state TEXT DEFAULT 'idle', error TEXT DEFAULT '', queued_at TEXT,
                     current_video TEXT, progress REAL DEFAULT 0, download_dir TEXT DEFAULT '',
-                    source TEXT NOT NULL DEFAULT 'youtube'
+                    source TEXT NOT NULL DEFAULT 'youtube',
+                    folder_is_custom INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE TABLE IF NOT EXISTS videos (
                     playlist_id TEXT NOT NULL REFERENCES playlists(id), id TEXT NOT NULL,
@@ -72,6 +75,8 @@ class Store:
                     error TEXT DEFAULT '', finished_at TEXT
                 );
             """)
+            # Commit each schema change together with the data it classifies.
+            db.execute("BEGIN IMMEDIATE")
             columns = {row[1] for row in db.execute("PRAGMA table_info(playlists)")}
             if "download_dir" not in columns:
                 db.execute(
@@ -81,6 +86,11 @@ class Store:
                 db.execute(
                     "ALTER TABLE playlists ADD COLUMN source TEXT NOT NULL DEFAULT 'youtube'"
                 )
+            if "folder_is_custom" not in columns:
+                db.execute(
+                    "ALTER TABLE playlists ADD COLUMN folder_is_custom INTEGER NOT NULL DEFAULT 0"
+                )
+                self._classify_legacy_folders(db)
             video_columns = {row[1] for row in db.execute("PRAGMA table_info(videos)")}
             for name, definition in {
                 "download_skipped": "INTEGER NOT NULL DEFAULT 0",
@@ -112,15 +122,33 @@ class Store:
         with self.connect() as db:
             return self._directory_override(db)
 
-    def set_directory_override(self, directory: Path | None):
-        with self.connect() as db:
-            # Old libraries resolved blank playlist paths against the startup
-            # directory. Pin those paths before changing the library default.
+    def _classify_legacy_folders(self, db):
+        # Previous versions stored both manual choices and allocations as absolute
+        # paths. Only infer an allocation for a missing ID/generated folder under
+        # a known default. Existing directories could have been chosen by hand.
+        roots = {self.download_dir, self._directory_override(db)}
+        rows = db.execute(
+            "SELECT id,download_dir FROM playlists WHERE download_dir != ''"
+        ).fetchall()
+        for row in rows:
+            path = Path(row["download_dir"])
+            if path.parent in roots and (
+                path.name == row["id"] or re.fullmatch(r".+ - [0-9a-f]{6}", path.name)
+            ):
+                try:
+                    path.lstat()
+                except FileNotFoundError:
+                    continue
+                except OSError:
+                    pass  # Preserve paths we cannot inspect.
             db.execute(
-                """UPDATE playlists SET download_dir=rtrim(?, '/') || '/' || id
-                   WHERE download_dir='' OR download_dir IS NULL""",
-                (str(self.download_dir.resolve()),),
+                "UPDATE playlists SET folder_is_custom=1 WHERE id=?", (row["id"],)
             )
+
+    def set_directory_override(
+        self, directory: Path | None, active_playlist: str | None = None
+    ) -> int:
+        with self.connect() as db:
             if directory is None:
                 db.execute("DELETE FROM download_directory WHERE id=1")
             else:
@@ -129,6 +157,76 @@ class Store:
                        ON CONFLICT(id) DO UPDATE SET directory=excluded.directory""",
                     (str(directory),),
                 )
+            return self._apply_default_folder(
+                db, directory or self.download_dir, active_playlist
+            )
+
+    def apply_default_folder(self) -> int:
+        with self.connect() as db:
+            return self._apply_default_folder(
+                db, self._directory_override(db) or self.download_dir
+            )
+
+    def _apply_default_folder(
+        self, db, root: Path, active_playlist: str | None = None
+    ) -> int:
+        # Materialize the original ID path even for protected legacy rows. Later
+        # startup settings must not change where a partial or completed file lives.
+        db.execute(
+            """UPDATE playlists SET download_dir=rtrim(?, '/') || '/' || id
+               WHERE download_dir='' OR download_dir IS NULL""",
+            (str(self.download_dir),),
+        )
+        try:
+            if not root.is_dir():
+                return 0
+        except OSError:
+            return 0
+        rows = db.execute(
+            "SELECT id,download_dir,folder_is_custom,state FROM playlists"
+        ).fetchall()
+        reserved = {Path(row["download_dir"]) for row in rows}
+        updated = 0
+        for row in rows:
+            if (
+                row["folder_is_custom"]
+                or row["id"] == active_playlist
+                or row["state"] in {"queued", "running"}
+            ):
+                continue
+            old = Path(row["download_dir"])
+            target = root / old.name
+            if target in reserved or not self._can_rebind_folder(old, target):
+                continue
+            db.execute(
+                "UPDATE playlists SET download_dir=? WHERE id=?",
+                (str(target), row["id"]),
+            )
+            reserved.add(target)
+            updated += 1
+        return updated
+
+    @staticmethod
+    def _can_rebind_folder(old: Path, target: Path) -> bool:
+        # Database counters miss .part files, receipts and user files. Inspect
+        # the directory itself; a disconnected source or occupied target cannot
+        # be safely reassigned. lstat also detects dangling destination symlinks.
+        try:
+            if not old.parent.is_dir() or old.is_symlink():
+                return False
+            try:
+                with os.scandir(old) as entries:
+                    if next(entries, None) is not None:
+                        return False
+            except FileNotFoundError:
+                pass
+            try:
+                target.lstat()
+            except FileNotFoundError:
+                return True
+        except OSError:
+            pass
+        return False
 
     def playlist_directory(self, playlist_id: str) -> Path:
         playlist = self.playlist(playlist_id)
@@ -178,7 +276,7 @@ class Store:
         # Only allocate once. Renames and syncs must not detach .part files or
         # downloaded media. Old rows with no override keep their legacy ID folder.
         name = safe_stem(title, max_chars=100, max_bytes=180) or "Playlist"
-        root = self._directory_override(db) or self.download_dir.resolve()
+        root = self._directory_override(db) or self.download_dir
         for _ in range(20):
             path = root / f"{name} - {secrets.token_hex(3)}"
             if (
@@ -451,6 +549,7 @@ class Store:
             "current_video",
             "progress",
             "download_dir",
+            "folder_is_custom",
         }
         if not fields or not fields.keys() <= allowed:
             raise ValueError("Invalid playlist update")

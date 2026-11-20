@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 import shutil
 import subprocess
 import sys
@@ -66,14 +65,19 @@ def test_transient_failures_are_not_misclassified_as_unavailable():
 
 @pytest.mark.parametrize("custom", [False, True])
 def test_worker_pause_resume_and_idempotent_completion(
-    store, settings, monkeypatch, custom
+    store, settings, monkeypatch, tmp_path, custom
 ):
     if custom:
         playlist_id = store.create_custom_playlist("Resumable custom list", [VID])
     else:
         playlist_id = PID
         store.sync_videos(PID, [video()])
-    folder = store.playlist_directory(playlist_id) / VID
+    original = store.playlist_directory(playlist_id)
+    settings.download_dir.mkdir(exist_ok=True)
+    destination = tmp_path / "Updated default"
+    destination.mkdir()
+    store.set_directory_override(destination)
+    folder = destination / original.name / VID
     folder.mkdir(parents=True)
     # A real subprocess writes a .part before waiting. The second invocation sees
     # that partial data, completes it, and writes the same receipt yt-dlp uses.
@@ -89,9 +93,9 @@ partial.unlink()
 """
     calls = []
 
-    def command(*args):
-        calls.append(args[4])
-        return [sys.executable, "-c", script, str(folder)]
+    def command(settings, playlist_id, video_id, directory, options):
+        calls.append(options)
+        return [sys.executable, "-c", script, str(directory / video_id)]
 
     monkeypatch.setattr("youtube_download.downloads.build_command", command)
     manager = DownloadManager(store, settings, Mock())
@@ -111,6 +115,7 @@ partial.unlink()
         wait_for(lambda: store.playlist(playlist_id)["state"] == "completed")
         assert store.video(playlist_id, VID)["local_available"]
         assert (folder / "video.mp4").read_bytes() == b"first half second half"
+        assert not original.exists()
         manager.enqueue(playlist_id)
         wait_for(lambda: store.playlist(playlist_id)["state"] == "completed")
         assert len(calls) == 2

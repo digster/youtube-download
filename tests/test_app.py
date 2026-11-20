@@ -102,11 +102,142 @@ def test_default_download_directory_applies_to_new_playlists(
     assert client.get("/api/status").json()["download_dir"] == str(
         settings.download_dir
     )
-    assert store.playlist_directory(custom["id"]).parent == root
+    assert store.playlist_directory(custom["id"]) == (
+        settings.download_dir / Path(custom["download_dir"]).name
+    )
     assert (
         store.playlist_directory(store.create_custom_playlist("Next", [VID])).parent
         == settings.download_dir
     )
+
+
+def test_default_folder_updates_existing_unused_playlists(client, tmp_path):
+    store = client.app.state.store
+    original = store.playlist_directory(PID)
+    original.mkdir()  # Even an allocated, empty directory has no files to strand.
+    custom_id = store.create_custom_playlist("Clips", [VID])
+    custom_name = store.playlist_directory(custom_id).name
+    root = tmp_path / "New default"
+    root.mkdir()
+    client.post(
+        "/api/download-directory", json={"directory": str(root)}
+    ).raise_for_status()
+    assert client.get(BASE).json()["playlist"]["download_dir"] == str(
+        root / original.name
+    )
+    assert store.playlist_directory(custom_id) == root / custom_name
+    client.post("/api/sync").raise_for_status()
+    assert store.playlist_directory(PID) == root / original.name
+
+
+def test_default_folder_repairs_previously_pinned_paths_on_upgrade(settings, tmp_path):
+    app = create_app(settings, FakeAccount(), start_worker=False)
+    store = app.state.store
+    store.sync_playlists([playlist(), playlist("PLreadable"), playlist("PLmanual")])
+    readable = store.playlist_directory("PLreadable")
+    root = tmp_path / "Previously saved default"
+    root.mkdir()
+    manual = settings.download_dir / "My chosen folder"
+    manual.mkdir()
+    # Reproduce a database saved by the previous release, including its
+    # absolute startup/ID path and a manually selected child of that same root.
+    with store.connect() as db:
+        db.execute("INSERT INTO download_directory VALUES(1,?)", (str(root),))
+        db.execute(
+            "UPDATE playlists SET download_dir=? WHERE id=?",
+            (str(settings.download_dir / PID), PID),
+        )
+        db.execute(
+            "UPDATE playlists SET download_dir=? WHERE id='PLmanual'", (str(manual),)
+        )
+        db.execute("ALTER TABLE playlists DROP COLUMN folder_is_custom")
+
+    for _ in range(2):
+        reopened = create_app(settings, FakeAccount(), start_worker=False)
+        with TestClient(reopened, base_url="http://127.0.0.1") as client:
+            assert client.get(BASE).json()["playlist"]["download_dir"] == str(
+                root / PID
+            )
+            assert (
+                reopened.state.store.playlist_directory("PLreadable")
+                == root / readable.name
+            )
+            assert reopened.state.store.playlist_directory("PLmanual") == manual
+    assert list(root.iterdir()) == []
+
+
+def test_default_folder_preserves_partial_manual_and_conflicting_paths(
+    client, tmp_path
+):
+    store = client.app.state.store
+    root = tmp_path / "New default"
+    root.mkdir()
+    store.sync_playlists(
+        [playlist("PLmanual"), playlist("PLcollision"), playlist("PLqueued")]
+    )
+    manual = store.playlist_directory("PLmanual")
+    manual.mkdir()
+    client.post(
+        "/api/playlists/PLmanual/folder", json={"directory": str(manual)}
+    ).raise_for_status()
+    old = store.playlist_directory(PID)
+    (old / VID).mkdir(parents=True)
+    partial = old / VID / "video.part"
+    partial.write_bytes(b"partial transfer")
+    conflict = store.playlist_directory("PLcollision")
+    (root / conflict.name).mkdir()
+    queued = store.playlist_directory("PLqueued")
+    client.post("/api/playlists/PLqueued/download").raise_for_status()
+
+    client.post(
+        "/api/download-directory", json={"directory": str(root)}
+    ).raise_for_status()
+    assert store.playlist_directory("PLmanual") == manual
+    assert store.playlist_directory("PLcollision") == conflict
+    assert store.playlist_directory("PLqueued") == queued
+    assert store.playlist_directory(PID) == old
+    assert partial.read_bytes() == b"partial transfer"
+
+
+def test_default_folder_preserves_disconnected_source_and_dangling_symlinks(
+    client, tmp_path
+):
+    store = client.app.state.store
+    endpoint = "/api/download-directory"
+    first = tmp_path / "First drive"
+    second = tmp_path / "Second drive"
+    first.mkdir()
+    second.mkdir()
+    client.post(endpoint, json={"directory": str(first)}).raise_for_status()
+    source = store.playlist_directory(PID)
+    first.rmdir()
+    client.post(endpoint, json={"directory": str(second)}).raise_for_status()
+    assert store.playlist_directory(PID) == source
+    assert not first.exists()
+    first.mkdir()
+    target = second / source.name
+    target.symlink_to(tmp_path / "Missing")
+    client.post(endpoint, json={"directory": str(second)}).raise_for_status()
+    assert store.playlist_directory(PID) == source
+    target.unlink()
+    client.post(endpoint, json={"directory": str(second)}).raise_for_status()
+    assert store.playlist_directory(PID) == target
+
+
+def test_default_folder_waits_for_stopping_worker(client, tmp_path):
+    manager = client.app.state.manager
+    store = client.app.state.store
+    original = store.playlist_directory(PID)
+    # Pause changes the database state before the active worker releases its folder.
+    manager.active_playlist = PID
+    client.post(f"{BASE}/pause").raise_for_status()
+    result = client.post("/api/download-directory", json={"directory": str(tmp_path)})
+    assert result.json()["updated_playlists"] == 0
+    assert store.playlist_directory(PID) == original
+    manager.active_playlist = None
+    result = client.post("/api/download-directory", json={"directory": str(tmp_path)})
+    assert result.json()["updated_playlists"] == 1
+    assert store.playlist_directory(PID) == tmp_path / original.name
 
 
 def test_saved_directory_survives_restart_and_disconnected_drive(settings, tmp_path):
@@ -164,16 +295,20 @@ def test_invalid_default_download_directory_keeps_saved_location(
     assert client.get(endpoint).json()["download_dir"] == str(tmp_path)
 
 
-def test_failed_directory_save_rolls_back_legacy_paths(client, tmp_path):
+def test_failed_directory_save_rolls_back_preference_and_paths(client, tmp_path):
     store = client.app.state.store
     store.update_playlist(PID, download_dir="")
+    store.sync_playlists([playlist("PLsecond")])
+    original = store.playlist_directory("PLsecond")
     with store.connect() as db:
-        db.execute("""CREATE TRIGGER fail_save BEFORE INSERT ON download_directory
+        db.execute("""CREATE TRIGGER fail_save BEFORE UPDATE OF download_dir ON playlists
+                      WHEN NEW.id='PLsecond'
                       BEGIN SELECT RAISE(ABORT, 'simulated write failure'); END""")
     response = client.post("/api/download-directory", json={"directory": str(tmp_path)})
     assert response.status_code == 500
     assert store.directory_override() is None
     assert store.playlist(PID)["download_dir"] == ""
+    assert store.playlist_directory("PLsecond") == original
 
 
 @pytest.mark.parametrize(

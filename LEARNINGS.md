@@ -80,3 +80,7 @@
 - Finder includes the original YouTube watch page in its results, often with
   the video flag set. Keep the service identity and per-link content flags when
   labeling archive results. Rate-limit each HTTP hop, including redirects.
+- A saved default and an automatically assigned playlist path are separate
+  database values. Updating the default alone leaves already-synced playlists
+  on the old drive. Track manual choices explicitly and check for partial files
+  on disk before rebinding an unused automatic path.

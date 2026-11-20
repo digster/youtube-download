@@ -319,10 +319,12 @@ output preferences do not cause files to be created during a metadata update.
 
 Open **Account & setup → Where your videos live**, enter the path to an existing,
 writable folder (for example, `~/Movies` or `/Volumes/Media/Downloads`), and
-click **Save default folder**. Shelf uses it immediately for playlists you
-create or sync for the first time. The choice is saved with your library and
-survives a restart. **Use startup folder** restores `YTDL_DOWNLOAD_DIR`, which
-defaults to `<data dir>/downloads`.
+click **Save default folder**. New playlists use that location immediately.
+Existing playlists also follow it when Shelf assigned their folder and the old
+folder is empty or has never been created. **Use startup folder** applies the
+same rule with `YTDL_DOWNLOAD_DIR`, which defaults to `<data dir>/downloads`.
+Shelf also checks these paths at startup, including after an upgrade with a
+default already saved.
 
 New synced and custom playlists use `<playlist name> - <6-character random ID>`
 inside the configured download directory, for example
@@ -330,8 +332,14 @@ inside the configured download directory, for example
 names shortened. The folder is saved when the playlist is created; later title
 changes keep that location so completed and partial files remain usable.
 
-Existing playlist folders and manually selected locations stay unchanged.
-Older playlists can therefore still use their original playlist-ID folder.
+Shelf preserves the playlist folder name, including older playlist-ID names.
+Playlists with completed or partial files, queued or running transfers, or a
+folder selected through **Change folder** keep their location. Shelf also
+keeps the old path if it cannot check the drive or the destination is already
+occupied. After reconnecting a drive or stopping a transfer, save the default
+again to retry. If you moved a playlist yourself, reconnect it with **Change
+folder**. On upgrade, Shelf preserves older assignments when it cannot
+distinguish an automatic assignment from a manual choice.
 
 Search for a video's title in Finder or your file manager to find its ID
 folder. Shelf creates an empty `<video title>.txt` beside each completed
@@ -403,7 +411,7 @@ Copy `.env.example` to `.env`; all settings are optional.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `YTDL_DATA_DIR` | `./data` | SQLite database, advisory API quota, logs, server lock |
-| `YTDL_DOWNLOAD_DIR` | `<data dir>/downloads` | Startup parent folder for new playlists. A saved folder in Account & setup takes precedence. |
+| `YTDL_DOWNLOAD_DIR` | `<data dir>/downloads` | Startup default for playlist folders. A saved folder in Account & setup takes precedence. |
 | `YTDL_PORT` | `8765` | Loopback HTTP port; CLI `--port` takes precedence |
 | `YTDL_LOG_LEVEL` | `INFO` | Python console and rotating file log level |
 | `YTDL_CLIENT_SECRETS` | empty | Optional Google Desktop OAuth client JSON; otherwise auto-detected |

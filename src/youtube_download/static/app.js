@@ -694,7 +694,14 @@ async function updateDefaultFolder(action = "load") {
       : `${bytes(result.free_bytes)} available in the saved folder.`;
     $("#default-folder-reset").hidden = !result.download_dir_overridden;
     feedback.className = "auth-success";
-    feedback.textContent = action === "load" ? "" : "Default download folder saved.";
+    feedback.textContent = "";
+    if (action !== "load") {
+      const count = result.updated_playlists;
+      feedback.textContent = count
+        ? `Default download folder saved. Updated ${count} playlist${count === 1 ? "" : "s"}.`
+        : "Default download folder saved.";
+      await reload(true);
+    }
   } catch (error) {
     feedback.className = "auth-error";
     feedback.textContent = error.message;

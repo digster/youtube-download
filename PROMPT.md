@@ -181,3 +181,9 @@ continue
 Allow changing the default download directory and do the commits for me.
 
 Attached screenshot shows the read-only folder under Where your videos live.
+
+## 2026-11-20 — Playlists still using the old directory
+
+All the old and new playlists are still showing the old directory despite me changing the default download directory. If there any fixes also do the commits for me.
+
+The screenshots show Animation pointing to the startup downloads directory and Account & setup showing the saved external volume.

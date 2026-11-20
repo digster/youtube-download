@@ -95,6 +95,13 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
                 raise RuntimeError(
                     "Another downloader is already using this data directory."
                 ) from exc
+            # Repair libraries that already saved a default with the old app.
+            # Only the server holding the library lock may rebind worker paths.
+            updated = store.apply_default_folder()
+            if updated:
+                logger.info(
+                    "Applied the saved download folder to %d playlists", updated
+                )
             cookies.cleanup_sessions()
             if start_worker:
                 finder.start()
@@ -222,14 +229,21 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
                     "Shelf cannot write to that folder. Check its permissions or choose another folder.",
                 ) from exc
             try:
-                store.set_directory_override(directory)
+                # A pause may clear the stored running state before the worker
+                # releases the playlist. Keep its path stable until it exits.
+                with manager.lock:
+                    updated = store.set_directory_override(
+                        directory, manager.active_playlist
+                    )
             except sqlite3.Error as exc:
                 logger.exception("Could not save the default download folder")
                 raise HTTPException(
                     500, "Could not save the default folder in the library database."
                 ) from exc
-            logger.info("Updated default download folder for new playlists")
-            return download_directory_status()
+            logger.info(
+                "Saved default download folder and updated %d playlist paths", updated
+            )
+            return {**download_directory_status(), "updated_playlists": updated}
 
     @app.post("/api/download-directory")
     def change_download_directory(update: FolderUpdate):
@@ -488,7 +502,9 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
                     raise HTTPException(
                         409, "That folder is already assigned to another playlist."
                     )
-            store.update_playlist(playlist_id, download_dir=str(directory))
+            store.update_playlist(
+                playlist_id, download_dir=str(directory), folder_is_custom=1
+            )
         manager.backfill_title_files(playlist_id)
         return playlist_detail(playlist_id)
 

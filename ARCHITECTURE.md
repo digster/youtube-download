@@ -92,7 +92,7 @@ Browser: static/index.html + polling.js + app.js + style.css
 ## Durable state and resume contract
 
 `playlists` stores remote metadata, snapshot timestamps, job state, current
-progress, queue time, and an optional absolute download-folder override.
+progress, queue time, the assigned download path and whether it was chosen manually.
 `videos` is keyed by `(playlist_id, id)` and stores metadata, remote membership,
 availability, transfer state, a relative media path, size, and cached recovery
 links. Duplicate occurrences of one video in a playlist share a local file;
@@ -204,7 +204,7 @@ Metadata jobs cover all current membership, independent of pagination/filtering.
 
 ## Folder changes and retained data
 
-The setup form reads and saves the parent for new playlists with
+The setup form reads and saves the default playlist parent with
 `/api/download-directory`. Saving validates the absolute path and tests file
 creation. The SQLite `download_directory` table holds one optional override
 per library. A reset removes the row and uses the startup `YTDL_DOWNLOAD_DIR`.
@@ -216,10 +216,21 @@ New playlist directories are allocated once as
 `<effective parent>/<sanitized title> - <6 hex characters>` and persisted in
 `playlists.download_dir`. `Store._new_playlist_directory` caps both title length
 and UTF-8 bytes, retries filesystem/database collisions, and defers directory
-creation until downloading. Rows without a saved directory use the legacy
-`<YTDL_DOWNLOAD_DIR>/<playlist_id>` fallback. Saving or resetting the parent
-pins those paths in the same transaction, so later configuration changes
-preserve access to existing files and partial transfers.
+creation until downloading. Saving or resetting the parent records the preference
+and rebinds eligible paths in one transaction under the download manager lock.
+Startup runs the same check under the exclusive server lock before workers start,
+so previously saved preferences take effect on upgrade. The library view refreshes
+immediately after a save or reset.
+
+`Store._apply_default_folder` preserves each basename, including legacy IDs.
+It skips manual assignments (`folder_is_custom`), queued, running or stopping
+transfers, unavailable drives, nonempty or symlinked source folders, and
+destinations already reserved in SQLite or occupied on disk. This checks the
+filesystem because partial transfers can exist without a recorded media file.
+Older versions stored automatic and manual assignments in the same column.
+The migration recognizes missing ID-based or generated paths under the startup
+or saved parent and preserves ambiguous assignments.
+
 Every video's recorded path is relative to that playlist directory, such as
 `<video_id>/<video_id>.mp4`. The folder API changes only the playlist's absolute
 root and immediately rechecks local availability. It never moves files.
