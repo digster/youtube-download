@@ -13,6 +13,7 @@ Browser: static/index.html + polling.js + app.js + style.css
   ├─ GET /api/playlists, /api/playlists/:id (2 seconds active / 30 seconds idle)
   ├─ POST sync, refresh, download, pause, folder, find
   ├─ POST /api/playlists/custom (local URL list → saved membership)
+  ├─ DELETE /api/playlists/:id (custom playlists only)
   ├─ POST /api/playlists/:id/metadata, /metadata/resume, /metadata/cancel
   ├─ POST /api/auth/start, /config, /cancel; GET /api/auth/status
   ├─ GET/POST /api/cookies; POST /api/cookies/file
@@ -58,6 +59,11 @@ Browser: static/index.html + polling.js + app.js + style.css
   the whole list before atomically creating its header and membership in SQLite.
   The `source` column distinguishes `custom` from `youtube`; custom membership
   is immediately ready, bypasses Google during queueing, and rejects remote refresh.
+  Removal checks the saved source under the operation and worker locks. A worker
+  must release the playlist before removal. One SQLite transaction drops its
+  header, video memberships, metadata job and any Finder records exclusive to
+  those videos. Downloaded files stay on disk. An in-flight Finder response
+  still records its cooldown if its final membership was removed.
 - `downloads.py` owns scheduling and process control. It launches one video at a
   time with explicit options, no shell, no external yt-dlp configuration, and no
   user plugins. Files are named by video ID, so title changes and reordering do

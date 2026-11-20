@@ -195,3 +195,7 @@ After the last change, why has the specific download directory for a watchlist a
 The screenshot shows a folder on the saved drive named only for the YouTube playlist ID.
 
 Restart Shelf and verify the live library.
+
+## 2026-11-20 — Remove custom playlists
+
+Why can't I remove custom playlists? It's okay if I can't remove YouTube playlists. Do the commits for me.

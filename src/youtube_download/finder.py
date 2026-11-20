@@ -155,9 +155,9 @@ class Finder:
     def lookup(self, playlist_id: str, video_id: str, force=False) -> dict:
         if not VIDEO_ID.fullmatch(video_id):
             raise ValueError("Invalid video ID")
-        if self.store.video(playlist_id, video_id) is None:
-            raise ValueError("Video not found")
         with self.lock:
+            if self.store.video(playlist_id, video_id) is None:
+                raise LookupError("Video not found")
             row = self.store.archive_check(video_id)
             if (
                 not force
@@ -196,11 +196,10 @@ class Finder:
             request = client.build_request("GET", f"{self.base_url}/api/v5/{video_id}")
             for _ in range(client.max_redirects + 1):
                 self._wait_for_slot()
-                if (
-                    pending_only
-                    and not self.store.archive_check(video_id)["requested_at"]
-                ):
-                    return None  # Removed while waiting for the cooldown.
+                if pending_only:
+                    check = self.store.archive_check(video_id)
+                    if not check or not check["requested_at"]:
+                        return None  # Removed while waiting for the cooldown.
                 self.store.reserve_finder_request(time.time() + REQUEST_DELAY)
                 response = client.send(request, follow_redirects=False)
                 if response.next_request is None:

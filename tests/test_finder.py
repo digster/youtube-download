@@ -172,6 +172,31 @@ def test_retry_after_http_date_and_missing_value(monkeypatch):
     assert retry_delay(httpx.Response(429, headers={"Retry-After": "1"})) == 5
 
 
+@pytest.mark.parametrize("during_request", [False, True])
+def test_finder_handles_last_membership_removed_during_lookup(client, monkeypatch, during_request):
+    store = client.app.state.store
+    store.sync_videos(PID, [])
+    unique = "abcdefghijk"
+    custom = store.create_custom_playlist("Temporary", [unique])
+
+    def remove():
+        client.delete(f"/api/playlists/{custom}").raise_for_status()
+
+    def handle(request):
+        assert during_request
+        remove()
+        return httpx.Response(200, json=response())
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as transport:
+        finder = Finder(store, "https://finder.test", transport)
+        if not during_request:
+            monkeypatch.setattr(finder, "_wait_for_slot", remove)
+        assert finder.check_next()
+        assert not finder.check_next()
+    assert store.archive_check(unique) is None
+    assert (store.finder_next_request() > 0) == during_request
+
+
 def test_legacy_cache_and_manual_recheck_survive_restart(store):
     previous = parse_response(response())
     with store.connect() as db:

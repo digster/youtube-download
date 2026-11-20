@@ -346,6 +346,20 @@ class Store:
             self._queue_archives(db, playlist_id)
         return playlist_id
 
+    def remove_playlist(self, playlist_id: str):
+        # Archive checks belong to video IDs. Keep checks for every other copy,
+        # including videos retained locally after leaving a synced playlist.
+        with self.connect() as db:
+            db.execute(
+                """DELETE FROM archive_checks
+                   WHERE video_id IN (SELECT id FROM videos WHERE playlist_id=?)
+                   AND NOT EXISTS (SELECT 1 FROM videos WHERE id=video_id AND playlist_id<>?)""",
+                (playlist_id, playlist_id),
+            )
+            db.execute("DELETE FROM metadata_jobs WHERE playlist_id=?", (playlist_id,))
+            db.execute("DELETE FROM videos WHERE playlist_id=?", (playlist_id,))
+            db.execute("DELETE FROM playlists WHERE id=?", (playlist_id,))
+
     def sync_videos(self, playlist_id: str, videos: list[dict]):
         # Fetch the entire remote snapshot before this transaction: a failed API page
         # must never mark the remaining local videos as removed.
@@ -679,10 +693,13 @@ class Store:
         }
         with self.connect() as db:
             db.execute(
-                """INSERT INTO archive_checks(video_id,result,summary,checked_at) VALUES(?,?,?,?)
+                # Removal can commit while Finder is waiting for an HTTP response.
+                # Save the cooldown even if the video's last membership is gone.
+                """INSERT INTO archive_checks(video_id,result,summary,checked_at)
+                SELECT ?,?,?,? WHERE EXISTS (SELECT 1 FROM videos WHERE id=?)
                 ON CONFLICT(video_id) DO UPDATE SET result=excluded.result,
                 summary=excluded.summary,checked_at=excluded.checked_at,requested_at=NULL""",
-                (video_id, json.dumps(result), json.dumps(summary), now()),
+                (video_id, json.dumps(result), json.dumps(summary), now(), video_id),
             )
             db.execute(SAVE_FINDER_DEADLINE, (next_request,))
 

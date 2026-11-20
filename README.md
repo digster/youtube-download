@@ -300,6 +300,12 @@ from **Account & setup** and needs no Google API connection. Successful download
 also enrich video details from yt-dlp metadata. Custom playlists have video links
 but no original YouTube playlist link or Google refresh action.
 
+To remove a custom playlist, open **View library**, choose **Remove playlist**,
+and confirm. Shelf removes the list and its saved progress. Downloaded videos
+and partial files stay in the playlist folder. If a download or metadata update
+is running, pause the download or cancel the update first. YouTube playlists
+are managed on YouTube.
+
 Metadata updates cover the entire list, including videos on other pages or hidden
 by a filter. Progress shows how many were checked, updated, or failed. You can
 leave the page while the update runs, or click **Cancel update** and later

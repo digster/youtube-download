@@ -163,7 +163,7 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
             raise HTTPException(400, "Invalid playlist ID")
         playlist = store.playlist(playlist_id)
         if not playlist:
-            raise HTTPException(404, "Playlist not found. Sync your account first.")
+            raise HTTPException(404, "Playlist not found in your library.")
         return playlist
 
     def require_video(playlist_id, video_id):
@@ -412,6 +412,37 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
         videos = store.videos(playlist_id, compact_archives=compact_archives, review_video=review_video)
         return {"playlist": store.playlist_summary(row, videos), "videos": videos}
 
+    @app.delete("/api/playlists/{playlist_id}")
+    def remove_custom_playlist(playlist_id: str):
+        # Hold both launch locks through the commit. Queued work can be removed,
+        # while a paused worker may still own its subprocess and playlist rows.
+        with operations, manager.lock, metadata.lock:
+            playlist = require_playlist(playlist_id)
+            if playlist["source"] != "custom":
+                raise HTTPException(
+                    400, "Only custom playlists can be removed from Shelf."
+                )
+            if manager.active_playlist == playlist_id or playlist["state"] == "running":
+                raise HTTPException(
+                    409, "Pause the download and wait for it to stop before removing this playlist."
+                )
+            if (
+                metadata.active_playlist == playlist_id
+                or store.metadata_job(playlist_id)["state"] == "running"
+            ):
+                raise HTTPException(
+                    409, "Cancel the metadata update and wait for it to stop before removing this playlist."
+                )
+            try:
+                store.remove_playlist(playlist_id)
+            except sqlite3.Error as exc:
+                logger.exception("Could not remove custom playlist %s", playlist_id)
+                raise HTTPException(
+                    500, "Could not remove the playlist from the library database. Try again."
+                ) from exc
+        logger.info("Removed custom playlist %s", playlist_id)
+        return {"removed": playlist_id}
+
     @app.post("/api/playlists/{playlist_id}/refresh")
     def refresh(playlist_id: str):
         with operations:
@@ -477,9 +508,10 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
 
     @app.post("/api/playlists/{playlist_id}/pause")
     def pause(playlist_id: str):
-        require_playlist(playlist_id)
-        manager.pause(playlist_id)
-        return {"playlist": store.playlist(playlist_id)}
+        with manager.lock:
+            require_playlist(playlist_id)
+            manager.pause(playlist_id)
+            return {"playlist": store.playlist(playlist_id)}
 
     @app.post("/api/playlists/{playlist_id}/folder")
     def change_folder(playlist_id: str, update: FolderUpdate):
@@ -527,12 +559,17 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
 
     @app.post("/api/playlists/{playlist_id}/videos/{video_id}/find")
     def find(playlist_id: str, video_id: str, queue: bool = False):
-        require_video(playlist_id, video_id)
         if queue:
-            store.queue_archive_check(video_id)
+            with operations:
+                require_video(playlist_id, video_id)
+                store.queue_archive_check(video_id)
             finder.wake.set()
             return {"queued": True}
-        return finder.lookup(playlist_id, video_id)
+        require_video(playlist_id, video_id)
+        try:
+            return finder.lookup(playlist_id, video_id)
+        except LookupError as exc:
+            raise HTTPException(404, "Video not found") from exc
 
     @app.get("/api/playlists/{playlist_id}/videos/{video_id}/file")
     def media(playlist_id: str, video_id: str):

@@ -168,6 +168,87 @@ def test_only_youtube_playlists_expose_original_playlist_links(client):
     assert summaries[custom["id"]]["youtube_url"] is None
 
 
+def test_remove_custom_playlist_keeps_files_and_shared_video_records(client):
+    store = client.app.state.store
+    unique = "abcdefghijk"
+    custom = store.create_custom_playlist("Remove me", [VID, unique])
+    url = f"/api/playlists/{custom}"
+    folder = store.playlist_directory(custom)
+    media = folder / VID / f"{VID}.mp4"
+    media.parent.mkdir(parents=True)
+    media.write_bytes(b"saved media")
+    partial = folder / "unfinished.part"
+    partial.write_bytes(b"partial download")
+    store.update_video(custom, VID, file_path=str(media.relative_to(folder)))
+    client.app.state.manager.enqueue(custom)
+    client.app.state.metadata.enqueue(custom)
+    shared_check = dict(store.archive_check(VID))
+
+    assert client.delete(url).status_code == 200
+    assert client.get(url).status_code == client.delete(url).status_code == 404
+    reopened = Store(store.path, store.download_dir)
+    assert [p["id"] for p in reopened.playlists()] == [PID]
+    assert reopened.videos(custom) == []
+    with reopened.connect() as db:
+        assert not db.execute(
+            "SELECT 1 FROM metadata_jobs WHERE playlist_id=?", (custom,)
+        ).fetchone()
+    assert reopened.archive_check(unique) is None
+    assert dict(reopened.archive_check(VID)) == shared_check
+    assert reopened.video(PID, VID)
+    assert media.read_bytes() == b"saved media"
+    assert partial.read_bytes() == b"partial download"
+
+
+def test_removal_requires_local_request_and_custom_source(client):
+    store = client.app.state.store
+    custom = store.create_custom_playlist("Local", [VID])
+    url = f"/api/playlists/{custom}"
+    for headers in ({"X-Local-App": ""}, {"Origin": "https://other.test"}):
+        assert client.delete(url, headers=headers).status_code == 403
+    assert store.playlist(custom)
+    assert client.delete(f"/api/playlists/{PID}").status_code == 400
+    assert store.video(PID, VID)
+
+
+def test_removal_rolls_back_on_database_failure(client):
+    store = client.app.state.store
+    unique = "abcdefghijk"
+    custom = store.create_custom_playlist("Keep on failure", [unique])
+    client.app.state.metadata.enqueue(custom)
+    with store.connect() as db:
+        db.execute("""CREATE TRIGGER reject_removal BEFORE DELETE ON playlists
+                      BEGIN SELECT RAISE(ABORT, 'simulated failure'); END""")
+    response = client.delete(f"/api/playlists/{custom}")
+    assert response.status_code == 500
+    assert "library database" in response.json()["detail"]
+    assert store.playlist(custom) and store.video(custom, unique)
+    assert store.metadata_job(custom)["state"] == "queued"
+    assert store.archive_check(unique)["requested_at"]
+
+
+@pytest.mark.parametrize("worker", ["manager", "metadata"])
+def test_removal_waits_for_worker_to_release_playlist(client, worker):
+    store = client.app.state.store
+    custom = store.create_custom_playlist("Busy", [VID])
+    url = f"/api/playlists/{custom}"
+    manager = getattr(client.app.state, worker)
+    manager.enqueue(custom)
+    manager.active_playlist = custom
+    if worker == "manager":
+        store.update_playlist(custom, state="running")
+    else:
+        store.update_metadata_job(custom, state="running")
+    assert client.delete(url).status_code == 409
+    # Pause/cancel changes the stored state before the worker finishes cleanup.
+    action = "pause" if worker == "manager" else "metadata/cancel"
+    assert client.post(f"{url}/{action}").status_code == 200
+    assert client.delete(url).status_code == 409
+    assert store.video(custom, VID)
+    manager.active_playlist = None
+    assert client.delete(url).status_code == 200
+
+
 def test_account_sync_cannot_overwrite_custom_list(store):
     custom = store.create_custom_playlist("Mine", [VID, VID2])
     original = store.playlist(custom)

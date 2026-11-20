@@ -527,9 +527,12 @@ function renderDetail() {
     p.description ||
       "Your playlist and its local videos, together in one place.",
   );
+  const playlistActions = p.source === "custom"
+    ? `<button class="button secondary" data-action="remove-playlist" data-focus="remove-playlist">Remove playlist</button>${metadataButton(p)}`
+    : `<button class="button secondary" data-action="refresh" data-id="${escapeHTML(p.id)}" ${active(p) || state.busy.has(p.id) ? "disabled" : ""}>↻ Refresh videos</button>`;
   setMarkup(
     $("#page-actions"),
-    `<div class="heading-actions">${playlistSourceLink(p, "button secondary")}${p.source === "custom" ? metadataButton(p) : `<button class="button secondary" data-action="refresh" data-id="${escapeHTML(p.id)}" ${active(p) || state.busy.has(p.id) ? "disabled" : ""}>↻ Refresh videos</button>`}${downloadButton(p)}</div>`,
+    `${playlistSourceLink(p, "button secondary")}${playlistActions}${downloadButton(p)}`,
   );
   stats([
     ["Playlist videos", p.total],
@@ -633,12 +636,21 @@ async function fetchLibrary(force = false) {
       if (playlistId) {
         state.playlist = data.playlist;
         state.videos = data.videos;
-      } else state.playlists = data.playlists;
+      } else {
+        state.playlists = data.playlists;
+        // Another tab may have removed a selected playlist since the last poll.
+        const ids = new Set(data.playlists.map((p) => p.id));
+        for (const id of state.selected) if (!ids.has(id)) state.selected.delete(id);
+      }
       render();
       state.signature = signature;
     }
     setMarkup($("#connection"), '<span class="dot"></span> Local library');
   } catch (error) {
+    if (playlistId && error.status === 404) {
+      location.replace("/");
+      return;
+    }
     setMarkup($("#connection"), "Connection interrupted");
     if (!state.signature) {
       notice(error.message, true);
@@ -1070,6 +1082,12 @@ document.addEventListener("click", async (event) => {
     $("#create-name").focus();
     return;
   }
+  if (action === "remove-playlist") {
+    $("#remove-name").textContent = state.playlist.title;
+    $("#remove-error").hidden = true;
+    $("#remove-dialog").showModal();
+    return;
+  }
   if (action === "setup") {
     setup();
     return;
@@ -1252,6 +1270,24 @@ $("#player-dialog").addEventListener("close", () => {
   $("#player").pause();
   $("#player").removeAttribute("src");
   $("#player").load();
+});
+$("#confirm-remove").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  $("#remove-error").hidden = true;
+  try {
+    await api(apiPath(), "DELETE");
+    location.replace("/");
+  } catch (error) {
+    // A removal completed in another tab (or before a lost response) also succeeds.
+    if (error.status === 404) location.replace("/");
+    else {
+      $("#remove-error").textContent = error.message;
+      $("#remove-error").hidden = false;
+    }
+  } finally {
+    button.disabled = false;
+  }
 });
 $("#folder-form").addEventListener("submit", async (event) => {
   event.preventDefault();

@@ -21,6 +21,7 @@ async function testLibraryRendering(page) {
     ...playlist,
     id: "idle",
     title: "Idle playlist",
+    source: "youtube",
     state: "idle",
     metadata: { state: "idle", total: 2, updated: 0, failed: 0 },
   };
@@ -57,7 +58,17 @@ async function testLibraryRendering(page) {
     if (path === "/api/status") return route.fulfill({ json: { login: {} } });
     if (path === "/api/playlists")
       return route.fulfill({ json: { playlists } });
+    if (path === "/api/playlists/idle")
+      return route.fulfill({ json: { playlist: other, videos: [] } });
     if (path === "/api/playlists/active") {
+      if (!playlists.includes(playlist))
+        return route.fulfill({ status: 404, json: { detail: "Playlist not found." } });
+      if (route.request().method() === "DELETE") {
+        if (playlist.metadata.state === "running")
+          return route.fulfill({ status: 409, json: { detail: "Cancel the metadata update first." } });
+        playlists = playlists.filter((p) => p !== playlist);
+        return route.fulfill({ json: { removed: playlist.id } });
+      }
       const review = new URL(route.request().url()).searchParams.get("review_video");
       return route.fulfill({ json: { playlist, videos: videos.map((v) =>
         v.id === review && v.recovery ? {...v, recovery: archiveResult} : v
@@ -333,7 +344,7 @@ async function testLibraryRendering(page) {
   videos[0].local_available = true;
   await page.clock.runFor(2000);
   await page.getByRole("button", { name: "Archive links", exact: true }).click();
-  await page.getByRole("button", { name: "Play" }).waitFor();
+  await page.locator(".video-row").getByRole("button", { name: /Play$/ }).waitFor();
   check(await page.locator(".video-row").count() === 1, "Archive filter missed a saved video");
   await page.getByRole("button", { name: "Archive links (2)" }).click();
   const dialog = page.getByRole("dialog");
@@ -347,5 +358,26 @@ async function testLibraryRendering(page) {
   await dialog.getByRole("button", { name: "Close archive results" }).click();
   check(archiveRequests === 1 && await firstChoice.isChecked(), "Archive recheck changed download selection");
   check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "Checkboxes overflowed the viewport");
-  return "Playlist rendering and individual, mixed and bulk download selection passed.";
+  const remove = page.getByRole("button", { name: "Remove playlist", exact: true });
+  await remove.click();
+  await dialog.getByText("Active playlist", { exact: true }).waitFor();
+  check(await dialog.getByRole("button", { name: "Cancel" }).evaluate((b) => b === document.activeElement),
+    "Removal confirmation should initially focus Cancel");
+  await page.keyboard.press("Escape");
+  check(playlists.includes(playlist), "Dismissing the dialog removed the playlist");
+  await remove.click();
+  await dialog.getByRole("button", { name: "Remove playlist" }).click();
+  await dialog.getByText("Cancel the metadata update first.", { exact: true }).waitFor();
+  playlist.metadata.state = "paused";
+  await dialog.getByRole("button", { name: "Remove playlist" }).click();
+  await page.waitForURL(origin + "/");
+  await page.getByRole("link", { name: "Idle playlist", exact: true }).waitFor();
+  check(!(await page.getByRole("link", { name: "Active playlist", exact: true }).count()),
+    "Removed custom playlist is still visible");
+  await page.getByRole("link", { name: "Idle playlist", exact: true }).click();
+  await page.getByRole("button", { name: "Refresh videos" }).waitFor();
+  check(!(await remove.count()), "YouTube playlists should not offer removal");
+  await page.goto(origin + "/playlists/active");
+  await page.waitForURL(origin + "/");
+  return "Library rendering, download selection and custom playlist removal passed.";
 }

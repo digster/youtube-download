@@ -486,6 +486,18 @@
       </div>
       <div id="recovery-content"></div>
     </dialog>
+    <dialog id="remove-dialog" aria-labelledby="remove-title" aria-describedby="remove-description">
+      <h2 id="remove-title">Remove this playlist?</h2>
+      <p id="remove-description">
+        Removing <strong id="remove-name"></strong> clears its video list and
+        progress from Shelf. Downloaded files stay in their current folder.
+      </p>
+      <p id="remove-error" role="alert" hidden></p>
+      <div class="heading-actions">
+        <button class="button secondary" data-close autofocus>Cancel</button>
+        <button class="button danger" id="confirm-remove">Remove playlist</button>
+      </div>
+    </dialog>
     <dialog id="folder-dialog" aria-labelledby="folder-title">
       <div class="dialog-heading">
         <h2 id="folder-title">Playlist download folder</h2>

@@ -284,6 +284,13 @@ p {
 .button.primary:hover {
   background: #1b4e3b;
 }
+.button.danger {
+  background: var(--danger);
+  color: #fff;
+}
+.button.danger:hover {
+  background: #87332c;
+}
 .button.secondary {
   background: #fff;
   color: #40584b;
@@ -1206,6 +1213,10 @@ video {
 #create-form .heading-actions {
   margin-top: 20px;
 }
+#remove-description {
+  overflow-wrap: anywhere;
+}
+#remove-error,
 #folder-error {
   color: var(--danger);
 }
