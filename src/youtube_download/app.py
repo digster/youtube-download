@@ -1,26 +1,28 @@
 """Loopback-only HTTP API and static HTML application."""
 
-from contextlib import asynccontextmanager
 import fcntl
 import logging
-from pathlib import Path
 import shutil
+import sqlite3
+from contextlib import asynccontextmanager
+from pathlib import Path
+from tempfile import TemporaryFile
 from threading import Lock
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, ValidationError
-from starlette.middleware.trustedhost import TrustedHostMiddleware
-from starlette.concurrency import run_in_threadpool
 from google.auth.exceptions import RefreshError
+from pydantic import BaseModel, Field, ValidationError
+from starlette.concurrency import run_in_threadpool
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from youtube_backup.auth import ScopeUpgradeRequired
 
 from .account import Account
-from .auth import GoogleLogin, LoginError, MAX_CONFIG_BYTES
+from .auth import MAX_CONFIG_BYTES, GoogleLogin, LoginError
 from .config import PLAYLIST_ID, VIDEO_ID, Settings, contained_file
-from .cookies import CookieError, CookieSettings, MAX_COOKIE_BYTES
+from .cookies import MAX_COOKIE_BYTES, CookieError, CookieSettings
 from .custom_playlists import parse_video_urls
 from .download_settings import DownloadSettings
 from .downloads import DownloadManager
@@ -34,6 +36,21 @@ STATIC = Path(__file__).parent / "static"
 
 class FolderUpdate(BaseModel):
     directory: str = Field(min_length=1, max_length=4096)
+
+
+def existing_folder(value: str) -> Path:
+    try:
+        directory = Path(value).expanduser()
+        if not directory.is_absolute():
+            raise HTTPException(
+                400, "Enter an absolute folder path, or a path beginning with ~/."
+            )
+        directory = directory.resolve(strict=True)
+        if directory.is_dir():
+            return directory
+    except (OSError, RuntimeError, ValueError):
+        pass
+    raise HTTPException(400, "Choose an existing, accessible folder.")
 
 
 class SkipUpdate(BaseModel):
@@ -55,8 +72,9 @@ class CustomPlaylistCreate(BaseModel):
 def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
     settings = settings or Settings.from_env()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
-    settings.download_dir.mkdir(parents=True, exist_ok=True)
     store = Store(settings.data_dir / "library.sqlite3", settings.download_dir)
+    if store.directory_override() is None:
+        settings.download_dir.mkdir(parents=True, exist_ok=True)
     account = account or Account(settings.data_dir)
     login = GoogleLogin(settings, account.save_credentials)
     finder = Finder(store, settings.finder_url)
@@ -173,18 +191,65 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
                 "YouTube sync failed. Check your connection, API quota, and youtube-backup login. Cached playlists are still available.",
             ) from exc
 
+    @app.get("/api/download-directory")
+    def download_directory_status():
+        override = store.directory_override()
+        directory = override or settings.download_dir
+        try:
+            free_bytes = shutil.disk_usage(directory).free
+        except OSError:
+            # An external drive can be offline. Keep setup accessible so the
+            # user can reconnect it or choose a different default.
+            free_bytes = None
+        return {
+            "download_dir": str(directory),
+            "free_bytes": free_bytes,
+            "download_dir_overridden": override is not None,
+        }
+
+    def save_download_directory(directory: Path | None):
+        with operations:
+            target = directory or settings.download_dir
+            try:
+                if directory is None:
+                    target.mkdir(parents=True, exist_ok=True)
+                # A real creation checks OS permissions and read-only mounts.
+                with TemporaryFile(dir=target):
+                    pass
+            except OSError as exc:
+                raise HTTPException(
+                    400,
+                    "Shelf cannot write to that folder. Check its permissions or choose another folder.",
+                ) from exc
+            try:
+                store.set_directory_override(directory)
+            except sqlite3.Error as exc:
+                logger.exception("Could not save the default download folder")
+                raise HTTPException(
+                    500, "Could not save the default folder in the library database."
+                ) from exc
+            logger.info("Updated default download folder for new playlists")
+            return download_directory_status()
+
+    @app.post("/api/download-directory")
+    def change_download_directory(update: FolderUpdate):
+        return save_download_directory(existing_folder(update.directory))
+
+    @app.post("/api/download-directory/reset")
+    def reset_download_directory():
+        return save_download_directory(None)
+
     @app.get("/api/status")
     def status():
         cookie_status = cookies.status()
         return {
             "account": account.status(),
             "login": login.status(),
-            "download_dir": str(settings.download_dir),
+            **download_directory_status(),
             "ffmpeg": bool(shutil.which("ffmpeg")),
             "javascript": bool(shutil.which("node") or shutil.which("deno")),
             "cookies": cookie_status["active"],
             "cookie_settings": cookie_status,
-            "free_bytes": shutil.disk_usage(settings.download_dir).free,
         }
 
     @app.get("/api/download-settings")
@@ -414,17 +479,7 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
                     409,
                     "Pause this playlist and wait for its download to stop before changing folders.",
                 )
-            directory = Path(update.directory).expanduser()
-            if not directory.is_absolute():
-                raise HTTPException(
-                    400, "Enter an absolute folder path, or a path beginning with ~/."
-                )
-            directory = directory.resolve()
-            if not directory.is_dir():
-                raise HTTPException(
-                    400,
-                    "That folder does not exist. Create it or move your playlist folder there first.",
-                )
+            directory = existing_folder(update.directory)
             for other in store.playlists():
                 if (
                     other["id"] != playlist_id

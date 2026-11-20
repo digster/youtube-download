@@ -17,6 +17,7 @@ Browser: static/index.html + polling.js + app.js + style.css
   ├─ POST /api/auth/start, /config, /cancel; GET /api/auth/status
   ├─ GET/POST /api/cookies; POST /api/cookies/file
   ├─ GET/POST /api/download-settings; POST /api/download-settings/reset
+  ├─ GET/POST /api/download-directory; POST /api/download-directory/reset
   ├─ Google system-browser consent → GET /auth/callback → Shelf
   └─ GET video/file (FileResponse supports HTTP ranges)
                   │
@@ -203,12 +204,22 @@ Metadata jobs cover all current membership, independent of pagination/filtering.
 
 ## Folder changes and retained data
 
+The setup form reads and saves the parent for new playlists with
+`/api/download-directory`. Saving validates the absolute path and tests file
+creation. The SQLite `download_directory` table holds one optional override
+per library. A reset removes the row and uses the startup `YTDL_DOWNLOAD_DIR`.
+Save, reset and playlist creation share the application operation lock.
+Folder status reports available bytes on the effective drive, or null if
+the drive is inaccessible.
+
 New playlist directories are allocated once as
-`<YTDL_DOWNLOAD_DIR>/<sanitized title> - <6 hex characters>` and persisted in
+`<effective parent>/<sanitized title> - <6 hex characters>` and persisted in
 `playlists.download_dir`. `Store._new_playlist_directory` caps both title length
 and UTF-8 bytes, retries filesystem/database collisions, and defers directory
-creation until downloading. Existing rows are not renamed: rows without a saved
-directory retain the legacy `<YTDL_DOWNLOAD_DIR>/<playlist_id>` fallback.
+creation until downloading. Rows without a saved directory use the legacy
+`<YTDL_DOWNLOAD_DIR>/<playlist_id>` fallback. Saving or resetting the parent
+pins those paths in the same transaction, so later configuration changes
+preserve access to existing files and partial transfers.
 Every video's recorded path is relative to that playlist directory, such as
 `<video_id>/<video_id>.mp4`. The folder API changes only the playlist's absolute
 root and immediately rechecks local availability. It never moves files.

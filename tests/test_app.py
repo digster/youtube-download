@@ -1,8 +1,13 @@
 import shutil
+from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
+from conftest import PID, VID, VID2, FakeAccount, playlist, save_video, video
+from fastapi.testclient import TestClient
 
-from conftest import PID, VID, VID2, playlist, save_video, video
+from youtube_download.app import create_app
+from youtube_download.config import Settings
 
 BASE = f"/api/playlists/{PID}"
 
@@ -62,6 +67,115 @@ def test_change_folder_rechecks_files_and_serves_moved_video(client, tmp_path):
     assert (new / VID / "A video.txt").read_bytes() == b""
 
 
+def test_default_download_directory_applies_to_new_playlists(
+    client, settings, tmp_path, monkeypatch
+):
+    store = client.app.state.store
+    media = save_video(store)
+    client.post(f"{BASE}/download").raise_for_status()
+    root = tmp_path / "Video library"
+    root.mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    usage = Mock(return_value=Mock(free=12345))
+    monkeypatch.setattr(shutil, "disk_usage", usage)
+    response = client.post(
+        "/api/download-directory", json={"directory": "~/Video library"}
+    )
+    response.raise_for_status()
+    assert response.json()["download_dir"] == str(root)
+    assert client.get("/api/status").json()["free_bytes"] == 12345
+    usage.assert_called_with(root)
+    monkeypatch.setattr(
+        FakeAccount, "playlists", lambda self: [playlist(), playlist("PLnew")]
+    )
+    client.post("/api/sync").raise_for_status()
+    assert store.playlist_directory(PID) == media.parent.parent
+    assert client.get(f"{BASE}/videos/{VID}/file").content == b"local video"
+    assert store.playlist(PID)["state"] == "queued"
+    assert store.playlist_directory("PLnew").parent == root
+    custom = client.post(
+        "/api/playlists/custom",
+        json={"title": "Local", "urls": f"https://youtu.be/{VID}"},
+    ).json()["playlist"]
+    assert Path(custom["download_dir"]).parent == root
+    client.post("/api/download-directory/reset").raise_for_status()
+    assert client.get("/api/status").json()["download_dir"] == str(
+        settings.download_dir
+    )
+    assert store.playlist_directory(custom["id"]).parent == root
+    assert (
+        store.playlist_directory(store.create_custom_playlist("Next", [VID])).parent
+        == settings.download_dir
+    )
+
+
+def test_saved_directory_survives_restart_and_disconnected_drive(settings, tmp_path):
+    root = tmp_path / "External drive"
+    root.mkdir()
+    options = {"base_url": "http://127.0.0.1", "headers": {"X-Local-App": "1"}}
+    app = create_app(settings, FakeAccount(), start_worker=False)
+    with TestClient(app, **options) as client:
+        # Legacy rows have no stored folder. Their ID-based paths must still
+        # resolve if the startup environment changes after saving a default.
+        client.post("/api/sync").raise_for_status()
+        client.post(f"{BASE}/refresh").raise_for_status()
+        app.state.store.update_playlist(PID, download_dir="")
+        media = save_video(app.state.store)
+        client.post(
+            "/api/download-directory", json={"directory": str(root)}
+        ).raise_for_status()
+    root.rmdir()
+    new_startup = tmp_path / "Different startup folder"
+    reopened = create_app(
+        Settings(settings.data_dir, new_startup), FakeAccount(), start_worker=False
+    )
+    with TestClient(reopened, **options) as client:
+        status = client.get("/api/status").json()
+        assert status["download_dir"] == str(root) and status["free_bytes"] is None
+        assert not root.exists() and not new_startup.exists()
+        assert reopened.state.store.playlist_directory(PID) == media.parent.parent
+        client.post("/api/download-directory/reset").raise_for_status()
+        assert client.get("/api/download-directory").json()["download_dir"] == str(
+            new_startup
+        )
+
+
+def test_invalid_default_download_directory_keeps_saved_location(
+    client, tmp_path, monkeypatch
+):
+    endpoint = "/api/download-directory"
+    client.post(endpoint, json={"directory": str(tmp_path)}).raise_for_status()
+    file = tmp_path / "file"
+    file.touch()
+    for value in ("relative/folder", str(file), str(tmp_path / "missing"), "/a\0b"):
+        response = client.post(endpoint, json={"directory": value})
+        assert response.status_code == 400
+    assert (
+        client.post(
+            endpoint, json={"directory": "/"}, headers={"X-Local-App": ""}
+        ).status_code
+        == 403
+    )
+    monkeypatch.setattr(
+        "youtube_download.app.TemporaryFile", Mock(side_effect=PermissionError)
+    )
+    response = client.post(endpoint, json={"directory": str(file.parent.parent)})
+    assert response.status_code == 400 and "write" in response.json()["detail"]
+    assert client.get(endpoint).json()["download_dir"] == str(tmp_path)
+
+
+def test_failed_directory_save_rolls_back_legacy_paths(client, tmp_path):
+    store = client.app.state.store
+    store.update_playlist(PID, download_dir="")
+    with store.connect() as db:
+        db.execute("""CREATE TRIGGER fail_save BEFORE INSERT ON download_directory
+                      BEGIN SELECT RAISE(ABORT, 'simulated write failure'); END""")
+    response = client.post("/api/download-directory", json={"directory": str(tmp_path)})
+    assert response.status_code == 500
+    assert store.directory_override() is None
+    assert store.playlist(PID)["download_dir"] == ""
+
+
 @pytest.mark.parametrize(
     "directory", ["relative/path", "/does-not-exist-yt-download-test"]
 )
@@ -90,8 +204,6 @@ def test_active_folder_and_already_assigned_folder_are_rejected(client, tmp_path
 
 
 def test_account_error_preserves_cached_library(client, monkeypatch):
-    from conftest import FakeAccount
-
     def fail(*args):
         raise RuntimeError("secret data that must not appear")
 
@@ -108,7 +220,6 @@ def test_unknown_ids_return_404(client):
 
 
 def test_expired_oauth_gives_reconnect_instructions(client, monkeypatch):
-    from conftest import FakeAccount
     from google.auth.exceptions import RefreshError
 
     def fail(*args):

@@ -656,14 +656,62 @@ function setup() {
   const check = (name, ok, yes, no) =>
     `<div class="setup-check"><span>${name}</span><strong class="${ok ? "" : "warning"}">${ok ? yes : no}</strong></div>`;
   $("#setup-content").innerHTML =
-    `<section class="auth-card" aria-label="Google connection"><h3>Your YouTube account</h3><p>Connect with Google to see your playlists. Sign-in opens in your browser and requests read-only YouTube access.</p><div id="auth-controls" aria-live="polite"></div><p id="auth-error" class="auth-error" role="alert" hidden></p><details id="auth-file-options" ${state.login?.configured ? "" : "open"}><summary>Google OAuth client file</summary><p id="auth-config-status"></p><label class="auth-file-label" for="auth-client-file">Choose Desktop app client JSON</label><input id="auth-client-file" type="file" accept=".json,application/json"><p class="muted">Use the OAuth client JSON from your Google Cloud project. The file stays on this computer.</p></details></section><section class="cookie-card" aria-label="Download cookies"><h3>Private or restricted videos</h3><p>Google supplies your playlist list. For videos that need sign-in, choose where yt-dlp gets your YouTube cookies.</p><div id="cookie-controls"></div></section>${s ? check("ffmpeg", s.ffmpeg, "Ready", "Install required") + check("JavaScript runtime", s.javascript, "Ready", "Install Node or Deno") : "<p>Server status is unavailable.</p>"}<h3>Where your videos live</h3><code>${escapeHTML(s?.download_dir || "Configured in .env")}</code><p>${s ? `${bytes(s.free_bytes)} available. ` : ""}Change a playlist's folder on its library page after moving its contents. Downloads use video ID subfolders so titles can change safely.</p><h3>Dependencies</h3><p>Install ffmpeg and Node or Deno. On macOS with Homebrew:</p><code>brew install ffmpeg node</code><p class="muted">Active playlists resume when the app restarts. Paused playlists stay paused. Watch Later and saved playlists from other channels are not exposed by the account API.</p>`;
+    `<section class="auth-card" aria-label="Google connection"><h3>Your YouTube account</h3><p>Connect with Google to see your playlists. Sign-in opens in your browser and requests read-only YouTube access.</p><div id="auth-controls" aria-live="polite"></div><p id="auth-error" class="auth-error" role="alert" hidden></p><details id="auth-file-options" ${state.login?.configured ? "" : "open"}><summary>Google OAuth client file</summary><p id="auth-config-status"></p><label class="auth-file-label" for="auth-client-file">Choose Desktop app client JSON</label><input id="auth-client-file" type="file" accept=".json,application/json"><p class="muted">Use the OAuth client JSON from your Google Cloud project. The file stays on this computer.</p></details></section><section class="cookie-card" aria-label="Download cookies"><h3>Private or restricted videos</h3><p>Google supplies your playlist list. For videos that need sign-in, choose where yt-dlp gets your YouTube cookies.</p><div id="cookie-controls"></div></section>${s ? check("ffmpeg", s.ffmpeg, "Ready", "Install required") + check("JavaScript runtime", s.javascript, "Ready", "Install Node or Deno") : "<p>Server status is unavailable.</p>"}`;
   renderLogin();
   // Cookie controls are loaded once on opening. OAuth polling must not reset an
   // unsaved browser choice, optional profile, or selected local file.
   refreshCookies();
+  updateDefaultFolder();
   if (!$("#setup-dialog").open) $("#setup-dialog").showModal();
   refreshLogin();
 }
+
+// Load the folder on each open so changes made in another tab are visible.
+// The static form survives sign-in polling and closing/reopening during a save.
+let defaultFolderBusy = false;
+async function updateDefaultFolder(action = "load") {
+  if (defaultFolderBusy) return;
+  defaultFolderBusy = true;
+  const fields = $("#default-folder-fields");
+  const path = $("#default-folder-path");
+  const feedback = $("#default-folder-feedback");
+  fields.disabled = true;
+  feedback.className = "";
+  feedback.textContent = action === "load" ? "Loading folder…" : "Saving folder…";
+  const endpoint = "/api/download-directory";
+  try {
+    let result;
+    if (action === "save") {
+      result = await api(endpoint, "POST", { directory: path.value.trim() });
+    } else if (action === "reset") {
+      result = await api(endpoint + "/reset", "POST");
+    } else {
+      result = await api(endpoint);
+    }
+    path.value = result.download_dir;
+    $("#default-folder-space").textContent = result.free_bytes == null
+      ? "Free space unavailable. Check that the drive is connected."
+      : `${bytes(result.free_bytes)} available in the saved folder.`;
+    $("#default-folder-reset").hidden = !result.download_dir_overridden;
+    feedback.className = "auth-success";
+    feedback.textContent = action === "load" ? "" : "Default download folder saved.";
+  } catch (error) {
+    feedback.className = "auth-error";
+    feedback.textContent = error.message;
+  } finally {
+    fields.disabled = false;
+    defaultFolderBusy = false;
+  }
+}
+
+$("#default-folder-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  updateDefaultFolder("save");
+});
+$("#default-folder-reset").addEventListener("click", () => updateDefaultFolder("reset"));
+$("#default-folder-path").addEventListener("input", () => {
+  $("#default-folder-feedback").textContent = "";
+});
 
 const browserNames = {
   firefox: "Firefox",

@@ -1,11 +1,11 @@
 """SQLite owns job intent; yt-dlp owns partial files. Every update is transactional."""
 
-from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
 import json
-from pathlib import Path
 import secrets
 import sqlite3
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -63,6 +63,9 @@ class Store:
                 CREATE TABLE IF NOT EXISTS finder_throttle (
                     id INTEGER PRIMARY KEY CHECK(id=1), next_request REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS download_directory (
+                    id INTEGER PRIMARY KEY CHECK(id=1), directory TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS metadata_jobs (
                     playlist_id TEXT PRIMARY KEY REFERENCES playlists(id),
                     state TEXT NOT NULL, queued_at TEXT, current_video TEXT,
@@ -97,6 +100,35 @@ class Store:
             db.execute("""INSERT OR IGNORE INTO archive_checks(video_id, checked_at, result)
                           SELECT id, recovery_checked_at, recovery FROM videos
                           WHERE recovery IS NOT NULL ORDER BY recovery_checked_at DESC""")
+
+    @staticmethod
+    def _directory_override(db) -> Path | None:
+        row = db.execute(
+            "SELECT directory FROM download_directory WHERE id=1"
+        ).fetchone()
+        return Path(row["directory"]) if row else None
+
+    def directory_override(self) -> Path | None:
+        with self.connect() as db:
+            return self._directory_override(db)
+
+    def set_directory_override(self, directory: Path | None):
+        with self.connect() as db:
+            # Old libraries resolved blank playlist paths against the startup
+            # directory. Pin those paths before changing the library default.
+            db.execute(
+                """UPDATE playlists SET download_dir=rtrim(?, '/') || '/' || id
+                   WHERE download_dir='' OR download_dir IS NULL""",
+                (str(self.download_dir.resolve()),),
+            )
+            if directory is None:
+                db.execute("DELETE FROM download_directory WHERE id=1")
+            else:
+                db.execute(
+                    """INSERT INTO download_directory(id,directory) VALUES(1,?)
+                       ON CONFLICT(id) DO UPDATE SET directory=excluded.directory""",
+                    (str(directory),),
+                )
 
     def playlist_directory(self, playlist_id: str) -> Path:
         playlist = self.playlist(playlist_id)
@@ -146,8 +178,9 @@ class Store:
         # Only allocate once. Renames and syncs must not detach .part files or
         # downloaded media. Old rows with no override keep their legacy ID folder.
         name = safe_stem(title, max_chars=100, max_bytes=180) or "Playlist"
+        root = self._directory_override(db) or self.download_dir.resolve()
         for _ in range(20):
-            path = self.download_dir.resolve() / f"{name} - {secrets.token_hex(3)}"
+            path = root / f"{name} - {secrets.token_hex(3)}"
             if (
                 not path.exists()
                 and not path.is_symlink()

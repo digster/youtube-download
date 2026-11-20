@@ -1170,12 +1170,14 @@ video {
   }
 }
 #folder-form label,
+#default-folder-form label,
 #create-form label {
   display: block;
   font-size: 12px;
   margin: 22px 0 9px;
 }
 #folder-path,
+#default-folder-path,
 #create-name,
 #create-urls {
   width: 100%;
@@ -1185,6 +1187,7 @@ video {
   font-size: 12px;
   border-radius: 6px;
 }
+#default-folder-fields,
 #create-fields {
   min-width: 0;
   padding: 0;

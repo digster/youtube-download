@@ -416,6 +416,40 @@
         </button>
       </div>
       <div id="setup-content"></div>
+      <h3>Where your videos live</h3>
+      <form id="default-folder-form">
+        <fieldset id="default-folder-fields" disabled>
+          <label for="default-folder-path">Default download folder</label>
+          <input
+            id="default-folder-path"
+            required
+            maxlength="4096"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="/Volumes/Media/Downloads"
+            aria-describedby="default-folder-hint default-folder-space"
+          />
+          <p id="default-folder-hint">
+            Enter an existing folder for new playlists. If you move an existing
+            playlist’s files, open its library page and choose <strong>Change folder</strong>.
+          </p>
+          <p id="default-folder-space" class="muted"></p>
+          <div class="heading-actions">
+            <button class="button primary" type="submit">Save default folder</button>
+            <button class="button secondary" id="default-folder-reset" type="button" hidden>
+              Use startup folder
+            </button>
+          </div>
+        </fieldset>
+        <p id="default-folder-feedback" role="status"></p>
+      </form>
+      <h3>Dependencies</h3>
+      <p>Install ffmpeg and Node or Deno. On macOS with Homebrew:</p>
+      <code>brew install ffmpeg node</code>
+      <p class="muted">
+        Active playlists resume when the app restarts. Paused playlists stay paused.
+        Watch Later and saved playlists from other channels are not exposed by the account API.
+      </p>
     </dialog>
     <dialog
       id="player-dialog"

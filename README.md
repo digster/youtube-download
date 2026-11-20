@@ -317,6 +317,13 @@ output preferences do not cause files to be created during a metadata update.
 
 ### Default download folders
 
+Open **Account & setup → Where your videos live**, enter the path to an existing,
+writable folder (for example, `~/Movies` or `/Volumes/Media/Downloads`), and
+click **Save default folder**. Shelf uses it immediately for playlists you
+create or sync for the first time. The choice is saved with your library and
+survives a restart. **Use startup folder** restores `YTDL_DOWNLOAD_DIR`, which
+defaults to `<data dir>/downloads`.
+
 New synced and custom playlists use `<playlist name> - <6-character random ID>`
 inside the configured download directory, for example
 `Weekend watchlist - a1b2c3`. Unsafe filename characters are removed and long
@@ -396,7 +403,7 @@ Copy `.env.example` to `.env`; all settings are optional.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `YTDL_DATA_DIR` | `./data` | SQLite database, advisory API quota, logs, server lock |
-| `YTDL_DOWNLOAD_DIR` | `<data dir>/downloads` | Default parent folder for playlists |
+| `YTDL_DOWNLOAD_DIR` | `<data dir>/downloads` | Startup parent folder for new playlists. A saved folder in Account & setup takes precedence. |
 | `YTDL_PORT` | `8765` | Loopback HTTP port; CLI `--port` takes precedence |
 | `YTDL_LOG_LEVEL` | `INFO` | Python console and rotating file log level |
 | `YTDL_CLIENT_SECRETS` | empty | Optional Google Desktop OAuth client JSON; otherwise auto-detected |

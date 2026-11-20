@@ -175,3 +175,9 @@ Do not do anything, I will decide. Anyways, the response has multiple links whic
 Make sure to do the commits for me and also make sure the site is not bombarded and there's a delay in every request.
 
 continue
+
+## 2026-11-19 — Default download directory
+
+Allow changing the default download directory and do the commits for me.
+
+Attached screenshot shows the read-only folder under Where your videos live.
