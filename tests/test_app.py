@@ -23,6 +23,20 @@ def test_pages_and_security_headers(client):
     assert html.index("/static/polling.js") < html.index("/static/app.js")
 
 
+def test_browser_revalidates_the_library_ui_after_an_update(client):
+    # Overview and detail pages share assets whose contents change on upgrade.
+    for url in ("/", f"/playlists/{PID}", "/static/app.js", "/static/style.css"):
+        response = client.get(url)
+        assert response.headers.get("cache-control") == "no-cache", url
+    script = client.get("/static/app.js")
+    cached = client.get(
+        "/static/app.js", headers={"If-None-Match": script.headers["etag"]}
+    )
+    assert cached.status_code == 304
+    assert cached.headers.get("cache-control") == "no-cache"
+    assert client.get(BASE).headers["cache-control"] == "no-store"
+
+
 def test_start_is_idempotent_and_pause_persists(client):
     assert client.post(f"{BASE}/download").status_code == 200
     first = client.app.state.store.playlist(PID)["queued_at"]

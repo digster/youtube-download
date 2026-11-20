@@ -199,3 +199,8 @@ Restart Shelf and verify the live library.
 ## 2026-11-20 — Remove custom playlists
 
 Why can't I remove custom playlists? It's okay if I can't remove YouTube playlists. Do the commits for me.
+
+Not seeing the remove playlist option anywhere. If there are any changes, do the commits for me.
+
+The attached screenshot shows the custom Watch Later library with Update
+metadata and Resume as its only heading actions.

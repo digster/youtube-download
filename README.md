@@ -59,6 +59,8 @@ uv run youtube-download serve
 Open [the local app](http://127.0.0.1:8765). Use `--port 8767` to change the port.
 The server intentionally binds only to loopback. Run one server per data
 directory, without Uvicorn's multiple-worker mode. Stop with Ctrl+C.
+After updating Shelf, restart the server and reload any open library tab to
+pick up new controls.
 
 ### Connect your YouTube account
 

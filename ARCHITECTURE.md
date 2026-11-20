@@ -342,6 +342,10 @@ filesystem paths. OAuth/token contents are never sent to the client.
 
 The frontend uses ordinary links for playlist pages, native dialogs, responsive
 cards, accessible controls, local video playback, and a selection toolbar.
+Library HTML and static assets use `Cache-Control: no-cache` so navigation
+revalidates the UI after a checkout update. Static files support conditional
+requests with ETags. The `app.js?v=2` URL bypasses copies of the main script
+cached before revalidation was enabled.
 Playlist summaries expose a canonical YouTube playlist URL for synced sources
 only; cards and library headings link to it. All video rows link to their
 original YouTube URL independently of download status or local playback.

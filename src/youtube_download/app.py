@@ -156,6 +156,10 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
         )
         if request.url.path.startswith(("/api/", "/auth/")):
             response.headers["Cache-Control"] = "no-store"
+        elif request.url.path == "/" or request.url.path.startswith(("/playlists/", "/static/")):
+            # The library pages and frontend assets reuse URLs across updates.
+            # Browsers can still reuse unchanged scripts and styles after a 304.
+            response.headers["Cache-Control"] = "no-cache"
         return response
 
     def require_playlist(playlist_id):
