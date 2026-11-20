@@ -204,3 +204,7 @@ Not seeing the remove playlist option anywhere. If there are any changes, do the
 
 The attached screenshot shows the custom Watch Later library with Update
 metadata and Resume as its only heading actions.
+
+## 2026-11-20 — Edit custom playlist URLs
+
+For a custom playlist I should be able to add or remove the URLs(bulk as well). Do the commits for me.

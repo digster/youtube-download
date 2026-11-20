@@ -87,3 +87,7 @@
 - Check the basename as well as the parent when repairing automatic paths.
   Legacy rows can already point to the correct drive and still need their
   first readable name. Later syncs should reuse that allocation.
+- A video with `in_playlist=0` can still be part of the browsable library.
+  Preserve that behavior for older rows. Record explicit custom URL removals
+  separately so they can disappear from the UI and file routes while keeping
+  the download path and metadata for a later re-add.

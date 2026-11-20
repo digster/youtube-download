@@ -87,6 +87,10 @@
               <p id="collection-description">
                 Your YouTube and custom playlists
               </p>
+              <div id="url-actions" class="heading-actions" hidden>
+                <button class="button secondary small" data-action="add-urls">Add URLs</button>
+                <button class="button secondary small" data-action="remove-urls">Remove URLs</button>
+              </div>
             </div>
             <label class="search"
               ><span aria-hidden="true">⌕</span
@@ -485,6 +489,22 @@
         </button>
       </div>
       <div id="recovery-content"></div>
+    </dialog>
+    <dialog id="urls-dialog" aria-labelledby="urls-title">
+      <h2 id="urls-title"></h2>
+      <form id="urls-form">
+        <fieldset id="urls-fields">
+          <label for="edit-urls">YouTube video URLs</label>
+          <textarea id="edit-urls" required rows="6" spellcheck="false"
+            aria-describedby="urls-help" placeholder="Paste one video URL per line"></textarea>
+          <p id="urls-help" class="muted"></p>
+          <p id="urls-error" role="alert" class="auth-error" hidden></p>
+          <div class="heading-actions">
+            <button class="button secondary" type="button" data-close>Cancel</button>
+            <button class="button primary" type="submit" id="urls-submit"></button>
+          </div>
+        </fieldset>
+      </form>
     </dialog>
     <dialog id="remove-dialog" aria-labelledby="remove-title" aria-describedby="remove-description">
       <h2 id="remove-title">Remove this playlist?</h2>

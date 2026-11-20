@@ -1178,6 +1178,7 @@ video {
 }
 #folder-form label,
 #default-folder-form label,
+#urls-form label,
 #create-form label {
   display: block;
   font-size: 12px;
@@ -1186,6 +1187,7 @@ video {
 #folder-path,
 #default-folder-path,
 #create-name,
+#edit-urls,
 #create-urls {
   width: 100%;
   padding: 12px;
@@ -1195,17 +1197,20 @@ video {
   border-radius: 6px;
 }
 #default-folder-fields,
+#urls-fields,
 #create-fields {
   min-width: 0;
   padding: 0;
   margin: 0;
   border: 0;
 }
-#create-urls {
+#create-urls,
+#edit-urls {
   resize: vertical;
   line-height: 1.7;
 }
 #create-name:focus-visible,
+#edit-urls:focus-visible,
 #create-urls:focus-visible {
   outline: 2px solid var(--green);
   outline-offset: 2px;
@@ -1213,6 +1218,10 @@ video {
 #create-form .heading-actions {
   margin-top: 20px;
 }
+#url-actions {
+  margin-top: 12px;
+}
+#urls-title,
 #remove-description {
   overflow-wrap: anywhere;
 }

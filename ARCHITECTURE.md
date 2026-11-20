@@ -13,6 +13,7 @@ Browser: static/index.html + polling.js + app.js + style.css
   ├─ GET /api/playlists, /api/playlists/:id (2 seconds active / 30 seconds idle)
   ├─ POST sync, refresh, download, pause, folder, find
   ├─ POST /api/playlists/custom (local URL list → saved membership)
+  ├─ POST /api/playlists/:id/urls (add or remove video URLs in a custom playlist)
   ├─ DELETE /api/playlists/:id (custom playlists only)
   ├─ POST /api/playlists/:id/metadata, /metadata/resume, /metadata/cancel
   ├─ POST /api/auth/start, /config, /cancel; GET /api/auth/status
@@ -64,6 +65,14 @@ Browser: static/index.html + polling.js + app.js + style.css
   header, video memberships, metadata job and any Finder records exclusive to
   those videos. Downloaded files stay on disk. An in-flight Finder response
   still records its cooldown if its final membership was removed.
+  URL edits use the same validation and worker locks. Each request applies an
+  add or remove operation to the current membership under a SQLite write lock.
+  Appends preserve first-seen order and queue Finder checks for new members.
+  Removal sets `in_playlist=0` and `user_removed=1`. Reads hide explicitly
+  removed videos, including their file routes. Older retained rows remain
+  visible after migration. Re-adding a URL restores the same row at the end
+  with its media path, metadata and skip preference. Archive requests shared
+  by other current memberships survive removal.
 - `downloads.py` owns scheduling and process control. It launches one video at a
   time with explicit options, no shell, no external yt-dlp configuration, and no
   user plugins. Files are named by video ID, so title changes and reordering do
@@ -124,7 +133,8 @@ The library renders a checkbox for each video and a three-state master
 checkbox across all current members. The playlist-level `/videos/skip` POST
 updates every member in one SQLite transaction under the same launch lock.
 Both endpoints can change future download eligibility for saved media.
-Removed rows are retained for browsing with their download controls disabled.
+Videos removed by a YouTube sync are retained for browsing with their download
+controls disabled. Explicit custom URL removals leave the visible library.
 
 Transfers keep yt-dlp's `.part` and fragment state. `--abort-on-unavailable-fragments`
 prevents incomplete fragmented streams from being accepted as complete.

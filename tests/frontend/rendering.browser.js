@@ -43,6 +43,7 @@ async function testLibraryRendering(page) {
     thumbnail: playlist.thumbnail,
   }));
   let failedImages = 0;
+  const urlEdits = [];
   let rejectNextSelection = false;
   let archiveRequests = 0;
   const archiveResult = {
@@ -60,6 +61,13 @@ async function testLibraryRendering(page) {
       return route.fulfill({ json: { playlists } });
     if (path === "/api/playlists/idle")
       return route.fulfill({ json: { playlist: other, videos: [] } });
+    if (path === "/api/playlists/active/urls") {
+      const edit = route.request().postDataJSON();
+      urlEdits.push(edit);
+      if (edit.urls === "invalid")
+        return route.fulfill({ status: 400, json: { detail: "Invalid URL on line 1." } });
+      return route.fulfill({ json: { changed: edit.urls.split("\n").length, unchanged: 0 } });
+    }
     if (path === "/api/playlists/active") {
       if (!playlists.includes(playlist))
         return route.fulfill({ status: 404, json: { detail: "Playlist not found." } });
@@ -358,6 +366,26 @@ async function testLibraryRendering(page) {
   await dialog.getByRole("button", { name: "Close archive results" }).click();
   check(archiveRequests === 1 && await firstChoice.isChecked(), "Archive recheck changed download selection");
   check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "Checkboxes overflowed the viewport");
+  await page.getByRole("button", { name: "Add URLs", exact: true }).click();
+  const urls = dialog.getByLabel("YouTube video URLs");
+  await urls.fill("invalid");
+  await dialog.getByRole("button", { name: "Add URLs" }).click();
+  await dialog.getByText("Invalid URL on line 1.").waitFor();
+  const batch = "https://youtu.be/abcdefghijk\nhttps://youtu.be/00000000001";
+  await urls.fill(batch);
+  await page.clock.runFor(2000);
+  check(await urls.inputValue() === batch, "A library poll overwrote the URL draft");
+  await dialog.getByRole("button", { name: "Add URLs" }).click();
+  await page.getByText("Added 2 videos.").waitFor();
+  await page.getByRole("button", { name: "Remove URLs", exact: true }).click();
+  await urls.fill(batch);
+  await dialog.getByRole("button", { name: "Remove URLs" }).click();
+  await page.getByText("Removed 2 videos.").waitFor();
+  await page.getByRole("button", { name: "Remove Updated title from playlist" }).click();
+  check(await urls.inputValue() === "https://www.youtube.com/watch?v=video-1", "Row removal selected the wrong URL");
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  check(urlEdits.length === 3 && urlEdits[1].action === "add" && urlEdits[2].action === "remove",
+    "Unexpected URL edit after cancelling row removal");
   const remove = page.getByRole("button", { name: "Remove playlist", exact: true });
   await remove.click();
   await dialog.getByText("Active playlist", { exact: true }).waitFor();
@@ -377,6 +405,8 @@ async function testLibraryRendering(page) {
   await page.getByRole("link", { name: "Idle playlist", exact: true }).click();
   await page.getByRole("button", { name: "Refresh videos" }).waitFor();
   check(!(await remove.count()), "YouTube playlists should not offer removal");
+  check(!(await page.getByRole("button", { name: /^(Add|Remove) URLs$/ }).count()),
+    "YouTube playlists should not offer URL editing");
   await page.goto(origin + "/playlists/active");
   await page.waitForURL(origin + "/");
   return "Library rendering, download selection and custom playlist removal passed.";

@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from tempfile import TemporaryFile
 from threading import Lock
+from typing import Literal
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request
@@ -64,9 +65,16 @@ class CookieUpdate(BaseModel):
     container: str = Field(default="", max_length=200)
 
 
-class CustomPlaylistCreate(BaseModel):
-    title: str = Field(max_length=200)
+class PlaylistURLs(BaseModel):
     urls: str = Field(max_length=2_000_000)
+
+
+class CustomPlaylistCreate(PlaylistURLs):
+    title: str = Field(max_length=200)
+
+
+class CustomPlaylistEdit(PlaylistURLs):
+    action: Literal["add", "remove"]
 
 
 def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
@@ -416,27 +424,55 @@ def create_app(settings=None, account=None, start_worker=True) -> FastAPI:
         videos = store.videos(playlist_id, compact_archives=compact_archives, review_video=review_video)
         return {"playlist": store.playlist_summary(row, videos), "videos": videos}
 
+    def require_editable_custom_playlist(playlist_id):
+        # Callers hold both launch locks through commit. Queued workers have
+        # no snapshot yet; a paused worker may still own one until cleanup ends.
+        playlist = require_playlist(playlist_id)
+        if playlist["source"] != "custom":
+            raise HTTPException(
+                400, "Only custom playlists can be edited or removed from Shelf."
+            )
+        if manager.active_playlist == playlist_id or playlist["state"] == "running":
+            raise HTTPException(
+                409, "Pause the download and wait for it to stop before changing this playlist."
+            )
+        if (
+            metadata.active_playlist == playlist_id
+            or store.metadata_job(playlist_id)["state"] == "running"
+        ):
+            raise HTTPException(
+                409, "Cancel the metadata update and wait for it to stop before changing this playlist."
+            )
+
+    @app.post("/api/playlists/{playlist_id}/urls")
+    def edit_custom_playlist(playlist_id: str, request: CustomPlaylistEdit):
+        try:
+            ids = parse_video_urls(request.urls)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        with operations, manager.lock, metadata.lock:
+            require_editable_custom_playlist(playlist_id)
+            try:
+                changed = store.edit_custom_urls(
+                    playlist_id, ids, remove=request.action == "remove"
+                )
+            except sqlite3.Error as exc:
+                logger.exception("Could not edit custom playlist %s", playlist_id)
+                raise HTTPException(
+                    500, "Could not save the playlist changes. Try again."
+                ) from exc
+        if changed:
+            logger.info(
+                "Custom playlist %s: %s changed %d videos", playlist_id, request.action, changed
+            )
+            if request.action == "add":
+                finder.wake.set()
+        return {"changed": changed, "unchanged": len(ids) - changed}
+
     @app.delete("/api/playlists/{playlist_id}")
     def remove_custom_playlist(playlist_id: str):
-        # Hold both launch locks through the commit. Queued work can be removed,
-        # while a paused worker may still own its subprocess and playlist rows.
         with operations, manager.lock, metadata.lock:
-            playlist = require_playlist(playlist_id)
-            if playlist["source"] != "custom":
-                raise HTTPException(
-                    400, "Only custom playlists can be removed from Shelf."
-                )
-            if manager.active_playlist == playlist_id or playlist["state"] == "running":
-                raise HTTPException(
-                    409, "Pause the download and wait for it to stop before removing this playlist."
-                )
-            if (
-                metadata.active_playlist == playlist_id
-                or store.metadata_job(playlist_id)["state"] == "running"
-            ):
-                raise HTTPException(
-                    409, "Cancel the metadata update and wait for it to stop before removing this playlist."
-                )
+            require_editable_custom_playlist(playlist_id)
             try:
                 store.remove_playlist(playlist_id)
             except sqlite3.Error as exc:

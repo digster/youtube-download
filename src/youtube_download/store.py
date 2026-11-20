@@ -20,7 +20,8 @@ VIDEO_QUERY = """SELECT v.*, CASE WHEN :compact AND v.id != :review
                         THEN COALESCE(a.summary, a.result) ELSE a.result END AS archive_result,
                         a.checked_at AS archive_checked,
                         a.requested_at IS NOT NULL AS archive_pending
-                 FROM videos v LEFT JOIN archive_checks a ON a.video_id=v.id"""
+                 FROM videos v LEFT JOIN archive_checks a ON a.video_id=v.id
+                 WHERE v.user_removed=0"""
 SAVE_FINDER_DEADLINE = """INSERT INTO finder_throttle(id,next_request) VALUES(1,?)
     ON CONFLICT(id) DO UPDATE SET next_request=MAX(next_request,excluded.next_request)"""
 
@@ -94,6 +95,9 @@ class Store:
             video_columns = {row[1] for row in db.execute("PRAGMA table_info(videos)")}
             for name, definition in {
                 "download_skipped": "INTEGER NOT NULL DEFAULT 0",
+                # Old out-of-playlist rows were retained for browsing. Only an
+                # explicit URL removal hides the record while keeping its files.
+                "user_removed": "INTEGER NOT NULL DEFAULT 0",
                 "metadata_status": "TEXT NOT NULL DEFAULT 'pending'",
                 "metadata_error": "TEXT DEFAULT ''",
                 "metadata_updated_at": "TEXT",
@@ -330,21 +334,82 @@ class Store:
                     directory,
                 ),
             )
-            db.executemany(
-                "INSERT INTO videos(playlist_id,id,title,position,thumbnail) VALUES(?,?,?,?,?)",
-                [
-                    (
-                        playlist_id,
-                        value,
-                        f"YouTube video · {value}",
-                        position,
-                        f"https://i.ytimg.com/vi/{value}/hqdefault.jpg",
-                    )
-                    for position, value in enumerate(ids)
-                ],
-            )
-            self._queue_archives(db, playlist_id)
+            self._append_custom_videos(db, playlist_id, ids, 0)
         return playlist_id
+
+    def _append_custom_videos(self, db, playlist_id, ids, first_position):
+        # A restored membership keeps its download, metadata and skip preference.
+        # Existing members keep their positions even when included in a bulk paste.
+        changed = db.executemany(
+            """INSERT INTO videos(playlist_id,id,title,position,thumbnail) VALUES(?,?,?,?,?)
+               ON CONFLICT(playlist_id,id) DO UPDATE SET in_playlist=1,user_removed=0,position=excluded.position
+               WHERE videos.in_playlist=0""",
+            (
+                (playlist_id, vid, f"YouTube video · {vid}", pos, f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg")
+                for pos, vid in enumerate(ids, first_position)
+            ),
+        ).rowcount
+        if changed:
+            self._queue_archives(db, playlist_id, first_position=first_position)
+        return changed
+
+    def edit_custom_urls(self, playlist_id, video_ids, *, remove: bool) -> int:
+        with self.connect() as db:
+            # Allocate append positions against the committed membership. Separate
+            # tabs submit deltas, so an older draft cannot overwrite a newer edit.
+            db.execute("BEGIN IMMEDIATE")
+            if remove:
+                changed = db.execute(
+                    """UPDATE videos SET in_playlist=0,user_removed=1 WHERE playlist_id=? AND user_removed=0
+                       AND id IN (SELECT value FROM json_each(?))""",
+                    (playlist_id, json.dumps(video_ids)),
+                ).rowcount
+                if changed:
+                    self._cancel_unused_archives(db, playlist_id)
+            else:
+                first = db.execute(
+                    "SELECT COALESCE(MAX(position)+1,0) FROM videos WHERE playlist_id=? AND in_playlist=1",
+                    (playlist_id,),
+                ).fetchone()[0]
+                changed = self._append_custom_videos(db, playlist_id, video_ids, first)
+            if changed:
+                self._update_custom_job_totals(db, playlist_id)
+            return changed
+
+    @staticmethod
+    def _update_custom_job_totals(db, playlist_id):
+        # Recalculate finished jobs from recorded outcomes in the same transaction.
+        # Preserve paused and queued intent; the workers read the edited membership.
+        totals = db.execute(
+            """SELECT COUNT(*) AS members,
+               COUNT(*) FILTER (WHERE download_skipped=0 AND status='pending') AS pending,
+               COUNT(*) FILTER (WHERE download_skipped=0 AND status NOT IN ('pending','downloaded')) AS errors,
+               COUNT(*) FILTER (WHERE metadata_status='pending') AS metadata_pending,
+               COUNT(*) FILTER (WHERE metadata_status='failed') AS metadata_failed
+               FROM videos WHERE playlist_id=? AND in_playlist=1""",
+            (playlist_id,),
+        ).fetchone()
+        download_state = "completed"
+        if totals["errors"]:
+            download_state = "completed_with_errors"
+        elif totals["pending"]:
+            download_state = "idle"
+        db.execute(
+            """UPDATE playlists SET item_count=?,items_synced_at=?,
+               state=CASE WHEN state IN ('completed','completed_with_errors') THEN ? ELSE state END
+               WHERE id=?""",
+            (totals["members"], now(), download_state, playlist_id),
+        )
+        metadata_state = "completed"
+        if totals["metadata_pending"]:
+            metadata_state = "paused"
+        elif totals["metadata_failed"]:
+            metadata_state = "completed_with_errors"
+        db.execute(
+            """UPDATE metadata_jobs SET state=?,finished_at=CASE WHEN ? THEN NULL ELSE finished_at END
+               WHERE playlist_id=? AND state IN ('completed','completed_with_errors')""",
+            (metadata_state, totals["metadata_pending"], playlist_id),
+        )
 
     def remove_playlist(self, playlist_id: str):
         # Archive checks belong to video IDs. Keep checks for every other copy,
@@ -353,7 +418,7 @@ class Store:
             db.execute(
                 """DELETE FROM archive_checks
                    WHERE video_id IN (SELECT id FROM videos WHERE playlist_id=?)
-                   AND NOT EXISTS (SELECT 1 FROM videos WHERE id=video_id AND playlist_id<>?)""",
+                   AND NOT EXISTS (SELECT 1 FROM videos WHERE id=video_id AND playlist_id<>? AND user_removed=0)""",
                 (playlist_id, playlist_id),
             )
             db.execute("DELETE FROM metadata_jobs WHERE playlist_id=?", (playlist_id,))
@@ -404,14 +469,18 @@ class Store:
             self._queue_archives(
                 db, playlist_id, refresh=bool(previous["items_synced_at"])
             )
-            # Drop obsolete work when a refresh removes the last current
-            # membership. Keep cached links available on the retained row.
-            db.execute(
-                """UPDATE archive_checks SET requested_at=NULL WHERE requested_at IS NOT NULL
-                AND video_id IN (SELECT id FROM videos WHERE playlist_id=? AND in_playlist=0)
-                AND NOT EXISTS (SELECT 1 FROM videos WHERE id=video_id AND in_playlist=1)""",
-                (playlist_id,),
-            )
+            self._cancel_unused_archives(db, playlist_id)
+
+    @staticmethod
+    def _cancel_unused_archives(db, playlist_id):
+        # Another playlist may still need the same request. Cached results are
+        # useful if the video is added again, even after its last removal.
+        db.execute(
+            """UPDATE archive_checks SET requested_at=NULL WHERE requested_at IS NOT NULL
+               AND video_id IN (SELECT id FROM videos WHERE playlist_id=? AND in_playlist=0)
+               AND NOT EXISTS (SELECT 1 FROM videos WHERE id=video_id AND in_playlist=1)""",
+            (playlist_id,),
+        )
 
     def playlist(self, playlist_id: str) -> dict | None:
         with self.connect() as db:
@@ -466,7 +535,7 @@ class Store:
         with self.connect() as db:
             rows = db.execute(
                 VIDEO_QUERY
-                + " WHERE v.playlist_id=:playlist ORDER BY v.in_playlist DESC, v.position, v.id",
+                + " AND v.playlist_id=:playlist ORDER BY v.in_playlist DESC, v.position, v.id",
                 {
                     "compact": compact_archives,
                     "review": review_video,
@@ -481,7 +550,7 @@ class Store:
         # the read transaction before checking potentially slow external drives.
         query = """SELECT v.playlist_id,v.id,v.title,v.file_path,p.download_dir
                    FROM videos v JOIN playlists p ON v.playlist_id=p.id
-                   WHERE v.file_path IS NOT NULL"""
+                   WHERE v.file_path IS NOT NULL AND v.user_removed=0"""
         with self.connect() as db:
             if playlist_id is None:
                 return db.execute(query).fetchall()
@@ -490,6 +559,7 @@ class Store:
     @staticmethod
     def _video_view(row, directory: Path) -> dict:
         item = dict(row)
+        item.pop("user_removed")  # The query already excludes hidden rows.
         item["download_skipped"] = bool(item["download_skipped"])
         item["youtube_url"] = (
             f"https://www.youtube.com/watch?v={quote(item['id'], safe='')}"
@@ -510,7 +580,7 @@ class Store:
     def video(self, playlist_id: str, video_id: str) -> dict | None:
         with self.connect() as db:
             row = db.execute(
-                VIDEO_QUERY + " WHERE v.playlist_id=:playlist AND v.id=:review",
+                VIDEO_QUERY + " AND v.playlist_id=:playlist AND v.id=:review",
                 {"compact": False, "review": video_id, "playlist": playlist_id},
             ).fetchone()
         return (
@@ -602,11 +672,14 @@ class Store:
         )
 
     @staticmethod
-    def _queue_archives(db, playlist_id, *, refresh=False, missing_only=False):
+    def _queue_archives(
+        db, playlist_id, *, refresh=False, missing_only=False, first_position=None
+    ):
         # Membership and lookup intent are committed together. Multiple lists
         # requesting the same ID share one outstanding request, even on refresh.
         query = """INSERT INTO archive_checks(video_id,requested_at)
                    SELECT id,:requested FROM videos WHERE playlist_id=:playlist AND in_playlist=1
+                   AND (:first_position IS NULL OR position>=:first_position)
                    ORDER BY position,id ON CONFLICT(video_id) """
         conflict = (
             "DO NOTHING"
@@ -619,6 +692,7 @@ class Store:
             query + conflict,
             {
                 "playlist": playlist_id,
+                "first_position": first_position,
                 "requested": now(),
                 "refresh": refresh,
                 "cutoff": (datetime.now(timezone.utc) - timedelta(days=7)).isoformat(),
@@ -696,7 +770,7 @@ class Store:
                 # Removal can commit while Finder is waiting for an HTTP response.
                 # Save the cooldown even if the video's last membership is gone.
                 """INSERT INTO archive_checks(video_id,result,summary,checked_at)
-                SELECT ?,?,?,? WHERE EXISTS (SELECT 1 FROM videos WHERE id=?)
+                SELECT ?,?,?,? WHERE EXISTS (SELECT 1 FROM videos WHERE id=? AND user_removed=0)
                 ON CONFLICT(video_id) DO UPDATE SET result=excluded.result,
                 summary=excluded.summary,checked_at=excluded.checked_at,requested_at=NULL""",
                 (video_id, json.dumps(result), json.dumps(summary), now(), video_id),

@@ -14,6 +14,7 @@ required. Supported platforms: macOS and Linux.
   retries from **Download settings**, with saved preferences and a defaults reset.
 - List your account's owned playlists, including private playlists and Liked videos.
 - Create custom local playlists by pasting YouTube video URLs, without Google login.
+- Add or remove URLs in bulk, or remove one video directly from its playlist row.
 - Update custom playlist titles, channels, and thumbnails before downloading,
   with progress, cancellation, and resumable metadata lookups.
 - Open the original YouTube playlist from its card or library page, and the
@@ -301,6 +302,17 @@ URLs without downloading media. The lookup uses your current cookie source
 from **Account & setup** and needs no Google API connection. Successful downloads
 also enrich video details from yt-dlp metadata. Custom playlists have video links
 but no original YouTube playlist link or Google refresh action.
+
+In a custom playlist, choose **Add URLs** or **Remove URLs** under **Playlist
+library**. Paste one YouTube video URL per line and confirm. New videos appear
+at the end in paste order. Existing videos keep their places. If a line is
+invalid, Shelf shows its line number and keeps the draft for correction.
+
+Each video row also has a **Remove** button that fills in its URL. Removing the
+last URL leaves an empty playlist you can refill. Saved videos and partial files
+stay in their folder. Adding the same URL back restores its saved details and
+download selection. Pause a running download or cancel a running metadata
+update before editing. Queued jobs use the edited list.
 
 To remove a custom playlist, open **View library**, choose **Remove playlist**,
 and confirm. Shelf removes the list and its saved progress. Downloaded videos

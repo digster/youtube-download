@@ -1,5 +1,6 @@
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -85,6 +86,145 @@ def test_large_custom_playlist_import_has_no_video_count_cap(client):
 
 def test_large_duplicate_input_still_deduplicates():
     assert parse_video_urls((f"https://youtu.be/{VID}\n") * 501) == [VID]
+
+
+def test_edit_urls_preserves_order_saved_files_and_shared_work(client):
+    store = client.app.state.store
+    third, fourth = "abcdefghijk", "00000000001"
+    pid = store.create_custom_playlist("Edit me", [VID, VID2])
+    url = f"/api/playlists/{pid}/urls"
+
+    def edit(action, ids):
+        urls = "\n".join(f"https://youtu.be/{video_id}" for video_id in ids)
+        return client.post(url, json={"action": action, "urls": urls}).json()
+
+    folder = store.playlist_directory(pid)
+    media = folder / VID / f"{VID}.mp4"
+    media.parent.mkdir(parents=True)
+    media.write_bytes(b"saved")
+    store.update_video(
+        pid, VID, file_path=str(media.relative_to(folder)), title="Saved title",
+        status="downloaded", metadata_status="updated",
+    )
+    store.set_download_skipped(pid, VID, True)
+    with store.connect() as db:
+        db.execute("UPDATE archive_checks SET checked_at='2020-01-01',requested_at=NULL WHERE video_id=?", (VID2,))
+    assert edit("add", [third, VID, fourth, third]) == {"changed": 2, "unchanged": 1}
+    assert store.archive_check(third)["requested_at"]
+    assert not store.archive_check(VID2)["requested_at"]  # No stale-cache rescan for untouched members.
+    assert edit("add", [fourth]) == {"changed": 0, "unchanged": 1}
+    assert [v["id"] for v in store.videos(pid)] == [VID, VID2, third, fourth]
+    assert edit("remove", [VID, third, "00000000002"]) == {"changed": 2, "unchanged": 1}
+    assert edit("remove", [VID]) == {"changed": 0, "unchanged": 1}
+    assert store.archive_check(VID)["requested_at"]  # Still needed by the synced playlist.
+    assert not store.archive_check(third)["requested_at"]
+    assert client.get(f"/api/playlists/{pid}/videos/{VID}/file").status_code == 404
+    assert media.read_bytes() == b"saved"
+    assert edit("add", [VID])["changed"] == 1
+    reopened = Store(store.path, store.download_dir)
+    assert [v["id"] for v in reopened.videos(pid)] == [VID2, fourth, VID]
+    saved = reopened.video(pid, VID)
+    assert saved["title"] == "Saved title" and saved["local_available"] and saved["download_skipped"]
+    assert saved["metadata_status"] == "updated"
+    assert reopened.playlist(pid)["item_count"] == 3
+
+
+def test_concurrent_url_appends_merge_batches_once(store):
+    pid = store.create_custom_playlist("Two tabs", [VID])
+    shared = "00000000000"
+    first, second = ["00000000001", shared], ["00000000002", shared]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        edits = [pool.submit(store.edit_custom_urls, pid, batch, remove=False) for batch in (first, second)]
+        assert sorted(edit.result() for edit in edits) == [1, 2]
+    ids = [row["id"] for row in store.videos(pid)]
+    assert ids in ([VID, *first, second[0]], [VID, *second, first[0]])
+
+
+def test_url_edit_upgrade_keeps_preexisting_retained_rows_visible(store):
+    pid = store.create_custom_playlist("Older library", [VID])
+    with store.connect() as db:
+        db.execute("ALTER TABLE videos DROP COLUMN user_removed")
+        db.execute("UPDATE videos SET in_playlist=0 WHERE playlist_id=?", (pid,))
+    reopened = Store(store.path, store.download_dir)
+    assert reopened.video(pid, VID)["in_playlist"] == 0
+    assert reopened.edit_custom_urls(pid, [VID], remove=True) == 1
+    assert reopened.video(pid, VID) is None
+
+
+def test_edit_urls_validates_whole_batch_and_source(client):
+    store = client.app.state.store
+    pid = store.create_custom_playlist("Editable", [VID])
+    for action in ("add", "remove"):
+        body = {"action": action, "urls": f"https://youtu.be/{VID2}\ninvalid"}
+        response = client.post(f"/api/playlists/{pid}/urls", json=body)
+        assert response.status_code == 400 and "line(s) 2" in response.json()["detail"]
+        body["urls"] = f"https://youtu.be/{VID}"
+        assert client.post(f"/api/playlists/{PID}/urls", json=body).status_code == 400
+        assert client.post(f"/api/playlists/{pid}/urls", json=body, headers={"X-Local-App": ""}).status_code == 403
+    assert [v["id"] for v in store.videos(pid)] == [VID]
+
+
+def test_bulk_edits_can_empty_and_refill_a_large_playlist(client):
+    store = client.app.state.store
+    ids = [f"{n:011d}" for n in range(5001)]
+    pid = store.create_custom_playlist("Large", ids)
+    url = f"/api/playlists/{pid}/urls"
+    urls = "\n".join(f"https://youtu.be/{i}" for i in reversed(ids))
+    assert client.post(url, json={"action": "remove", "urls": urls}).json()["changed"] == len(ids)
+    assert store.playlist(pid)["item_count"] == 0 and store.videos(pid) == []
+    assert client.post(url, json={"action": "add", "urls": urls}).json()["changed"] == len(ids)
+    assert [v["id"] for v in store.videos(pid)] == ids[::-1]
+
+
+def test_edit_urls_updates_finished_jobs_and_respects_worker_ownership(client):
+    store = client.app.state.store
+    pid = store.create_custom_playlist("Jobs", [VID])
+    store.update_playlist(pid, state="completed")
+    store.set_download_skipped(pid, VID, True)
+    store.queue_metadata(pid)
+    store.update_video(pid, VID, metadata_status="updated")
+    store.update_metadata_job(pid, state="completed")
+    url = f"/api/playlists/{pid}/urls"
+    change = {"action": "add", "urls": f"https://youtu.be/{VID2}"}
+    for worker in (client.app.state.manager, client.app.state.metadata):
+        worker.active_playlist = pid
+        assert client.post(url, json=change).status_code == 409
+        assert store.video(pid, VID2) is None
+        worker.active_playlist = None
+    assert client.post(url, json=change).json()["changed"] == 1
+    assert store.playlist(pid)["state"] == "idle"
+    assert store.metadata_job(pid)["state"] == "paused"
+    assert store.pending_metadata_ids(pid) == [VID2]
+    client.app.state.manager.enqueue(pid)
+    client.app.state.metadata.enqueue(pid, resume=True)
+    assert client.post(url, json={**change, "action": "remove"}).json()["changed"] == 1
+    assert store.next_job() == pid and store.next_metadata_job() == pid
+    assert store.pending_metadata_ids(pid) == []
+
+
+def test_deleting_last_visible_copy_drops_archive_work(client):
+    store = client.app.state.store
+    unique = "abcdefghijk"
+    a = store.create_custom_playlist("First", [unique])
+    b = store.create_custom_playlist("Second", [unique])
+    client.post(f"/api/playlists/{a}/urls", json={"action": "remove", "urls": f"https://youtu.be/{unique}"}).raise_for_status()
+    assert store.archive_check(unique)["requested_at"]
+    client.delete(f"/api/playlists/{b}").raise_for_status()
+    row = store.archive_check(unique)
+    assert row is None or not row["requested_at"]
+
+
+def test_edit_urls_keeps_membership_and_archive_queue_atomic(client):
+    store = client.app.state.store
+    pid = store.create_custom_playlist("Atomic", [VID])
+    unique = "abcdefghijk"
+    with store.connect() as db:
+        db.execute("""CREATE TRIGGER fail_count BEFORE UPDATE OF item_count ON playlists
+                      BEGIN SELECT RAISE(ABORT, 'simulated failure'); END""")
+    response = client.post(f"/api/playlists/{pid}/urls", json={"action": "add", "urls": f"https://youtu.be/{unique}"})
+    assert response.status_code == 500
+    assert store.playlist(pid)["item_count"] == 1
+    assert store.video(pid, unique) is None and store.archive_check(unique) is None
 
 
 def test_custom_creation_needs_no_account_and_queues_normally(client, monkeypatch):

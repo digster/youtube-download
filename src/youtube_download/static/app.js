@@ -392,7 +392,7 @@ function renderMetadataPanel(p) {
     idle: "Video metadata",
     queued: "Metadata update queued",
     running: "Updating video metadata",
-    paused: "Metadata update cancelled",
+    paused: "Metadata update paused",
     error: "Metadata update stopped",
     completed: "Metadata updated",
     completed_with_errors: "Metadata update finished with errors",
@@ -480,9 +480,12 @@ function renderVideoRow(row, v) {
     ? "downloaded"
     : v.download_skipped ? "skipped" : v.status;
   const id = escapeHTML(v.id);
+  const remove = state.playlist.source === "custom"
+    ? `<button class="button quiet small" data-action="remove-urls" data-video="${id}" aria-label="Remove ${escapeHTML(v.title)} from playlist">Remove</button>`
+    : "";
   setMarkup(
     row.querySelector(".video-actions"),
-    `${badge(status)}${v.local_available ? `<button class="button secondary small" data-action="play" data-video="${id}">▷ Play</button>` : ""}${finderButton(v)}<a class="button quiet small" target="_blank" rel="noopener noreferrer" href="https://www.youtube.com/watch?v=${encodeURIComponent(v.id)}" aria-label="Open ${escapeHTML(v.title)} on YouTube (new tab)">YouTube ↗</a>`,
+    `${badge(status)}${v.local_available ? `<button class="button secondary small" data-action="play" data-video="${id}">▷ Play</button>` : ""}${finderButton(v)}<a class="button quiet small" target="_blank" rel="noopener noreferrer" href="https://www.youtube.com/watch?v=${encodeURIComponent(v.id)}" aria-label="Open ${escapeHTML(v.title)} on YouTube (new tab)">YouTube ↗</a>${remove}`,
   );
 }
 
@@ -541,6 +544,7 @@ function renderDetail() {
     ["Saved locally", bytes(p.bytes)],
   ]);
   setText($("#collection-title"), "Playlist library");
+  setHidden($("#url-actions"), p.source !== "custom");
   setText(
     $("#collection-description"),
     `${waitingForArchives(p) ? "Waiting for archive checks" : labels[p.state] || p.state}${p.current_video ? ` · Current video ${Math.round(p.progress)}%` : ""}${p.skipped ? ` · ${p.skipped} skipped` : ""}${p.archive_pending ? ` · ${p.archive_pending} archive checks remaining` : ""}`,
@@ -583,6 +587,8 @@ function renderDetail() {
   if (!p.items_synced_at)
     content +=
       '<div class="empty"><div class="empty-icon">▤</div><h3>Bring the playlist into view.</h3><p>Load its video list to see what is available, then start a download when you are ready.</p><button class="button primary" data-action="refresh">↻ Load videos</button></div>';
+  else if (p.source === "custom" && !state.videos.length)
+    content += '<div class="empty"><h3>This playlist is empty.</h3><p>Choose Add URLs to add videos.</p></div>';
   else if (!shown.length)
     content += `<div class="empty"><div class="empty-icon">▤</div><h3>No videos in this view.</h3><p>${p.source === "custom" ? "Try another filter or search." : "Try another filter, or refresh the playlist to check for new videos."}</p></div>`;
   setMarkup($("#result-info"), content);
@@ -1088,6 +1094,23 @@ document.addEventListener("click", async (event) => {
     $("#remove-dialog").showModal();
     return;
   }
+  if (action === "add-urls" || action === "remove-urls") {
+    const removing = action === "remove-urls";
+    const video = button.dataset.video && state.videos.find((v) => v.id === button.dataset.video);
+    const label = removing ? "Remove URLs" : "Add URLs";
+    $("#urls-form").dataset.action = removing ? "remove" : "add";
+    setText($("#urls-title"), `${label} ${removing ? "from" : "to"} ${state.playlist.title}`);
+    setText($("#urls-help"), removing
+      ? "Paste one URL per line. Removing videos from the playlist keeps their files on disk."
+      : "Paste one URL per line. New videos are appended in order. Existing videos keep their places.");
+    $("#edit-urls").value = video ? `https://www.youtube.com/watch?v=${video.id}` : "";
+    setText($("#urls-submit"), label);
+    $("#urls-submit").className = removing ? "button danger" : "button primary";
+    $("#urls-error").hidden = true;
+    $("#urls-dialog").showModal();
+    $("#edit-urls").focus();
+    return;
+  }
   if (action === "setup") {
     setup();
     return;
@@ -1270,6 +1293,34 @@ $("#player-dialog").addEventListener("close", () => {
   $("#player").pause();
   $("#player").removeAttribute("src");
   $("#player").load();
+});
+$("#urls-dialog").addEventListener("cancel", (event) => {
+  if ($("#urls-fields").disabled) event.preventDefault();
+});
+$("#urls-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const fields = $("#urls-fields");
+  if (fields.disabled) return;
+  const action = event.currentTarget.dataset.action;
+  const urls = $("#edit-urls").value;
+  fields.disabled = true;
+  $("#urls-error").hidden = true;
+  try {
+    if (urls.length > 2_000_000)
+      throw new Error("This paste exceeds 2 million characters. Split it into smaller batches.");
+    const {changed, unchanged} = await api(`${apiPath()}/urls`, "POST", {action, urls});
+    $("#urls-dialog").close();
+    const verb = action === "add" ? "Added" : "Removed";
+    const reason = action === "add" ? "already in the playlist" : "missing from the playlist";
+    const skipped = unchanged ? ` Skipped ${unchanged} ${reason}.` : "";
+    notice(`${verb} ${changed} video${changed === 1 ? "" : "s"}.${skipped}`);
+    reload(true);
+  } catch (error) {
+    setText($("#urls-error"), error.message);
+    $("#urls-error").hidden = false;
+  } finally {
+    fields.disabled = false;
+  }
 });
 $("#confirm-remove").addEventListener("click", async (event) => {
   const button = event.currentTarget;
